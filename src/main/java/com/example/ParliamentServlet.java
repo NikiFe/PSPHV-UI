@@ -23,7 +23,7 @@ public class ParliamentServlet extends HttpServlet {
     // Constructor to inject MongoDB collections
     public ParliamentServlet() {
         // Initialize MongoDB connection and get collections
-        MongoDatabase database = MongoDBConnection.getDatabase("parliament");
+        MongoDatabase database = MongoDBConnection.getDatabase();
         this.usersCollection = database.getCollection("users");
         this.proposalsCollection = database.getCollection("proposals");
     }
@@ -57,7 +57,7 @@ public class ParliamentServlet extends HttpServlet {
             case "/end-session":
                 handleEndSession(request, response);
                 break;
-            case "/register": // Added register endpoint
+            case "/register": // Handle registration
                 handleRegister(request, response);
                 break;
             default:
@@ -104,7 +104,7 @@ public class ParliamentServlet extends HttpServlet {
             JSONObject registerJson = new JSONObject(sb.toString());
             String username = registerJson.getString("username").trim();
             String password = registerJson.getString("password").trim();
-            String role = registerJson.getString("role").trim();
+            String role = registerJson.optString("role", "MEMBER").trim(); // Default role is MEMBER
 
             // Validate input
             if (username.isEmpty() || password.isEmpty() || role.isEmpty()) {
@@ -127,7 +127,7 @@ public class ParliamentServlet extends HttpServlet {
             // Create new user document
             Document newUser = new Document("username", username)
                     .append("password", hashedPassword)
-                    .append("role", role)
+                    .append("role", role.toUpperCase())
                     .append("present", false)
                     .append("seatStatus", "NEUTRAL")
                     .append("fines", 0)
@@ -276,8 +276,7 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
-
-    // Handle updating seat status (e.g., raising hand, objecting)
+    // Handle updating seat status (e.g., raising hand, objecting, canceling)
     private void handleUpdateStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
             HttpSession session = request.getSession(false);
@@ -316,8 +315,17 @@ public class ParliamentServlet extends HttpServlet {
                         return;
                     }
 
+                    // Prepare update document
+                    Document update;
+                    if ("NEUTRAL".equals(newStatus)) {
+                        // When setting to NEUTRAL, do NOT modify 'present'
+                        update = new Document("$set", new Document("seatStatus", "NEUTRAL"));
+                    } else {
+                        // When setting to any other status, ensure 'present' is true
+                        update = new Document("$set", new Document("seatStatus", newStatus).append("present", true));
+                    }
+
                     // Update the user's seat status
-                    Document update = new Document("$set", new Document("seatStatus", newStatus));
                     usersCollection.updateOne(query, update);
 
                     // Fetch updated user info
@@ -372,6 +380,7 @@ public class ParliamentServlet extends HttpServlet {
                 }
                 JSONObject proposalJson = new JSONObject(sb.toString());
                 String title = proposalJson.getString("title").trim();
+                String party = proposalJson.optString("party", "President").trim(); // Default party is President
 
                 if (title.isEmpty()) {
                     response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal title cannot be empty.");
@@ -385,7 +394,7 @@ public class ParliamentServlet extends HttpServlet {
                 // Save the proposal to the database
                 Document proposalDoc = new Document("title", title)
                         .append("proposalNumber", nextProposalNumber)
-                        .append("party", "President"); // Adjust as needed
+                        .append("party", party);
                 proposalsCollection.insertOne(proposalDoc);
 
                 // Broadcast proposal update via WebSocket
@@ -598,8 +607,9 @@ public class ParliamentServlet extends HttpServlet {
     // Handle fetching the speaking queue
     private void handleGetQueue(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
-            // Assuming queue is derived from users requesting to speak
-            List<Document> queueUsers = usersCollection.find(new Document("seatStatus", "REQUESTING_TO_SPEAK")).into(new ArrayList<>());
+            // Fetch users who are requesting to speak or objecting, ordered by some criteria if needed
+            List<Document> queueUsers = usersCollection.find(new Document("seatStatus", new Document("$in", List.of("REQUESTING_TO_SPEAK", "OBJECTING"))))
+                    .into(new ArrayList<>());
 
             JSONArray queueArray = new JSONArray();
             for (Document doc : queueUsers) {
@@ -624,4 +634,3 @@ public class ParliamentServlet extends HttpServlet {
         return (int) (count + 1);
     }
 }
-

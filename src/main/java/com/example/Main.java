@@ -1,6 +1,7 @@
 package com.example;
 
 import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.servlet.ServletHolder;
 import org.slf4j.Logger;
@@ -12,7 +13,14 @@ public class Main {
     public static void main(String[] args) {
         // Define server port
         int port = 8080;
-        Server server = new Server(port);
+        Server server = new Server();
+
+        // Create a ServerConnector to listen on all interfaces
+        ServerConnector connector = new ServerConnector(server);
+        connector.setPort(port);
+        // Optionally, set host to "0.0.0.0" to bind to all IPv4 addresses
+        connector.setHost("0.0.0.0");
+        server.addConnector(connector);
 
         // Create a ServletContextHandler with sessions enabled
         ServletContextHandler context = new ServletContextHandler(ServletContextHandler.SESSIONS);
@@ -38,7 +46,7 @@ public class Main {
 
             // Start the Jetty server
             server.start();
-            logger.info("Server started at http://localhost:{}/", port);
+            logger.info("Server started at http://{}:{}/", connector.getHost(), port);
             server.join(); // Keep the server running
         } catch (Throwable t) {
             logger.error("Error starting Jetty server: ", t);

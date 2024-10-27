@@ -17,12 +17,12 @@ public class MongoDBConnection {
     private static MongoDatabase database = null;
 
     // Initialize the MongoDB connection
-    public static synchronized MongoDatabase getDatabase(String dbName) {
+    public static synchronized MongoDatabase getDatabase() {
         if (mongoClient == null) {
             try {
                 mongoClient = MongoClients.create(CONNECTION_STRING);
-                database = mongoClient.getDatabase(dbName);
-                logger.info("Connected to MongoDB at '{}', database '{}'.", CONNECTION_STRING, dbName);
+                database = mongoClient.getDatabase(DATABASE_NAME);
+                logger.info("Connected to MongoDB at '{}', database '{}'.", CONNECTION_STRING, DATABASE_NAME);
             } catch (Exception e) {
                 logger.error("Failed to connect to MongoDB: ", e);
                 throw new RuntimeException("Failed to connect to MongoDB.", e);
