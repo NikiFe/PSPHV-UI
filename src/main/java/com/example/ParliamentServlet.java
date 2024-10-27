@@ -2,6 +2,8 @@ package com.example;
 
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.Updates;
 import org.bson.Document;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -12,6 +14,7 @@ import javax.servlet.ServletException;
 import javax.servlet.http.*;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 
 public class ParliamentServlet extends HttpServlet {
@@ -19,6 +22,7 @@ public class ParliamentServlet extends HttpServlet {
 
     private final MongoCollection<Document> usersCollection;
     private final MongoCollection<Document> proposalsCollection;
+    private final MongoCollection<Document> fineReasonsCollection;
 
     // Constructor to inject MongoDB collections
     public ParliamentServlet() {
@@ -26,6 +30,7 @@ public class ParliamentServlet extends HttpServlet {
         MongoDatabase database = MongoDBConnection.getDatabase();
         this.usersCollection = database.getCollection("users");
         this.proposalsCollection = database.getCollection("proposals");
+        this.fineReasonsCollection = database.getCollection("fineReasons");
     }
 
     @Override
@@ -69,26 +74,54 @@ public class ParliamentServlet extends HttpServlet {
 
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
-
         String path = request.getPathInfo();
 
-        switch (path) {
-            case "/users":
+        if (path != null) {
+            if (path.equals("/proposals")) {
+                handleGetProposals(request, response); // Fetch all proposals
+            } else if (path.startsWith("/proposals/")) {
+                handleGetProposalByNumber(request, response); // Fetch single proposal by number
+            } else if (path.equals("/users")) {
                 handleGetUsers(request, response);
-                break;
-            case "/user-info":
+            } else if (path.equals("/user-info")) {
                 handleUserInfo(request, response);
-                break;
-            case "/proposals":
-                handleGetProposals(request, response);
-                break;
-            case "/queue":
+            } else if (path.equals("/queue")) {
                 handleGetQueue(request, response);
-                break;
-            default:
+            } else {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
                 logger.warn("Unknown GET endpoint: {}", path);
-                break;
+            }
+        } else {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
+            logger.warn("Unknown GET endpoint: {}", path);
+        }
+    }
+
+    private void handleGetProposalByNumber(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            String proposalNumberStr = request.getPathInfo().split("/")[2]; // Extract proposal number from path
+            int proposalNumber = Integer.parseInt(proposalNumberStr);
+
+            // Find the proposal with the given proposalNumber
+            Document proposal = proposalsCollection.find(new Document("proposalNumber", proposalNumber)).first();
+
+            if (proposal != null) {
+                JSONObject proposalJson = new JSONObject(proposal.toJson());
+                proposalJson.put("proposalNumber", proposal.getInteger("proposalNumber"));
+
+                response.setContentType("application/json");
+                response.getWriter().write(proposalJson.toString());
+                logger.info("Fetched proposal with number '{}'.", proposalNumber);
+            } else {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Proposal not found.");
+                logger.warn("Proposal with number '{}' not found.", proposalNumber);
+            }
+        } catch (NumberFormatException e) {
+            logger.error("Invalid proposal number format: {}", e.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal number format.");
+        } catch (Exception e) {
+            logger.error("Error during fetching proposal by number: ", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while fetching the proposal.");
         }
     }
 
@@ -151,6 +184,107 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
+    // ParliamentServlet.java
+
+    @Override
+    protected void doDelete(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String path = request.getPathInfo();
+
+        if (path.startsWith("/proposals/")) {
+            handleDeleteProposal(request, response);
+        } else {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
+        }
+    }
+
+    private void handleDeleteProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        HttpSession session = request.getSession(false);
+        if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
+            String proposalNumber = request.getPathInfo().split("/")[2]; // Extract proposalNumber from path
+
+            try {
+                Document query = new Document("proposalNumber", Integer.parseInt(proposalNumber));
+                proposalsCollection.deleteOne(query);
+
+                response.setStatus(HttpServletResponse.SC_OK);
+                JSONObject resp = new JSONObject();
+                resp.put("message", "Proposal deleted successfully.");
+                response.setContentType("application/json");
+                response.getWriter().write(resp.toString());
+                logger.info("President deleted proposal with number '{}'.", proposalNumber);
+            } catch (NumberFormatException e) {
+                logger.error("Invalid proposal number format: {}", proposalNumber);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal number format.");
+            } catch (Exception e) {
+                logger.error("Error deleting proposal: ", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while deleting the proposal.");
+            }
+        } else {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can delete proposals.");
+        }
+    }
+
+
+    @Override
+    protected void doPut(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String path = request.getPathInfo();
+
+        if (path.startsWith("/proposals/")) {
+            handleUpdateProposal(request, response);
+        } else {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
+        }
+    }
+
+    private void handleUpdateProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        HttpSession session = request.getSession(false);
+        if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
+            String proposalNumber = request.getPathInfo().split("/")[2]; // Extract proposalNumber from path
+
+            try {
+                int parsedProposalNumber = Integer.parseInt(proposalNumber);
+
+                // Parse JSON payload
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = request.getReader().readLine()) != null) {
+                    sb.append(line);
+                }
+                JSONObject updateData = new JSONObject(sb.toString());
+
+                String title = updateData.optString("title", "").trim();
+                String party = updateData.optString("party", "").trim();
+
+                if (title.isEmpty() || party.isEmpty()) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Title and party cannot be empty.");
+                    return;
+                }
+
+                Document query = new Document("proposalNumber", parsedProposalNumber);
+                Document update = new Document("$set", new Document("title", title).append("party", party));
+                proposalsCollection.updateOne(query, update);
+
+                response.setStatus(HttpServletResponse.SC_OK);
+                JSONObject resp = new JSONObject();
+                resp.put("message", "Proposal updated successfully.");
+                response.setContentType("application/json");
+                response.getWriter().write(resp.toString());
+                logger.info("President updated proposal with number '{}'.", proposalNumber);
+            } catch (NumberFormatException e) {
+                logger.error("Invalid proposal number format: {}", proposalNumber);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal number format.");
+            } catch (Exception e) {
+                logger.error("Error updating proposal: ", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while updating the proposal.");
+            }
+        } else {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can update proposals.");
+        }
+    }
+
+
+
+
     // Handle user login
     private void handleLogin(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
@@ -209,14 +343,19 @@ public class ParliamentServlet extends HttpServlet {
             HttpSession session = request.getSession(false);
             if (session != null) {
                 String username = (String) session.getAttribute("username");
+                if (username != null) {
+                    // Update 'present' to false in the database
+                    usersCollection.updateOne(Filters.eq("username", username), Updates.set("present", false));
+                }
                 session.invalidate();
-                logger.info("User '{}' logged out.", username);
+                response.setStatus(HttpServletResponse.SC_OK);
+                JSONObject resp = new JSONObject();
+                resp.put("message", "Logged out successfully.");
+                response.setContentType("application/json");
+                response.getWriter().write(resp.toString());
+            } else {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "No active session.");
             }
-            response.setStatus(HttpServletResponse.SC_OK);
-            JSONObject resp = new JSONObject();
-            resp.put("message", "Logout successful.");
-            response.setContentType("application/json");
-            response.getWriter().write(resp.toString());
         } catch (Exception e) {
             logger.error("Error during logout: ", e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred during logout.");
@@ -434,9 +573,17 @@ public class ParliamentServlet extends HttpServlet {
                 String usernameToFine = fineJson.getString("username").trim();
                 int amount = fineJson.getInt("amount");
 
-                if (usernameToFine.isEmpty() || amount <= 0) {
-                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid username or amount.");
-                    logger.warn("President provided invalid username '{}' or amount '{}'.", usernameToFine, amount);
+                // Check for the reason field in JSON payload
+                if (!fineJson.has("reason")) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Fine reason is required.");
+                    logger.warn("Fine reason missing for username '{}'.", usernameToFine);
+                    return;
+                }
+                String reason = fineJson.getString("reason").trim();
+
+                if (usernameToFine.isEmpty() || amount <= 0 || reason.isEmpty()) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid username, amount, or reason.");
+                    logger.warn("President provided invalid data for imposing fine.");
                     return;
                 }
 
@@ -446,14 +593,27 @@ public class ParliamentServlet extends HttpServlet {
 
                 if (userDoc != null) {
                     // Update user's fines
-                    Document update = new Document("$inc", new Document("fines", amount));
-                    usersCollection.updateOne(query, update);
+                    usersCollection.updateOne(query, Updates.inc("fines", amount));
+
+                    // Generate a unique fineId (e.g., UUID)
+                    String fineId = "FINE-" + System.currentTimeMillis(); // Simple example, consider using UUID for uniqueness
+
+                    // Store fine reason in 'fineReasons' collection
+                    Document fineReasonDoc = new Document("fineId", fineId)
+                            .append("username", usernameToFine)
+                            .append("amount", amount)
+                            .append("reason", reason)
+                            .append("timestamp", new Date())
+                            .append("issuedBy", (String) session.getAttribute("username"))
+                            .append("status", "active");
+                    fineReasonsCollection.insertOne(fineReasonDoc);
 
                     // Broadcast fine imposed via WebSocket
                     JSONObject fineImposed = new JSONObject();
                     fineImposed.put("type", "fineImposed");
                     fineImposed.put("username", usernameToFine);
                     fineImposed.put("amount", amount);
+                    fineImposed.put("reason", reason);
                     SeatWebSocket.broadcast(fineImposed);
 
                     response.setStatus(HttpServletResponse.SC_OK);
@@ -461,14 +621,14 @@ public class ParliamentServlet extends HttpServlet {
                     resp.put("message", "Fine imposed successfully.");
                     response.setContentType("application/json");
                     response.getWriter().write(resp.toString());
-                    logger.info("President imposed a fine of {} on '{}'.", amount, usernameToFine);
+                    logger.info("President imposed a fine of {} on '{}'. Reason: {}", amount, usernameToFine, reason);
                 } else {
                     response.sendError(HttpServletResponse.SC_NOT_FOUND, "User to fine not found.");
                     logger.warn("President attempted to impose a fine on non-existent user '{}'.", usernameToFine);
                 }
             } else {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can impose fines.");
-                logger.warn("Non-president attempted to impose a fine.");
+                logger.warn("Unauthorized attempt to impose a fine.");
             }
         } catch (Exception e) {
             logger.error("Error during imposing fine: ", e);
@@ -592,7 +752,9 @@ public class ParliamentServlet extends HttpServlet {
 
             JSONArray proposalsArray = new JSONArray();
             for (Document doc : proposals) {
-                proposalsArray.put(new JSONObject(doc.toJson()));
+                JSONObject proposalJson = new JSONObject(doc.toJson());
+                proposalJson.put("proposalNumber", doc.getInteger("proposalNumber"));
+                proposalsArray.put(proposalJson);
             }
 
             response.setContentType("application/json");
@@ -603,6 +765,7 @@ public class ParliamentServlet extends HttpServlet {
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while fetching proposals.");
         }
     }
+
 
     // Handle fetching the speaking queue
     private void handleGetQueue(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -630,7 +793,15 @@ public class ParliamentServlet extends HttpServlet {
 
     // Helper method to get the next proposal number
     private int getNextProposalNumber() {
-        long count = proposalsCollection.countDocuments();
-        return (int) (count + 1);
+        Document lastProposal = proposalsCollection.find()
+                .sort(new Document("proposalNumber", -1))
+                .limit(1)
+                .first();
+
+        if (lastProposal != null) {
+            return lastProposal.getInteger("proposalNumber") + 1;
+        } else {
+            return 1; // Start from 1 if no proposals exist
+        }
     }
 }

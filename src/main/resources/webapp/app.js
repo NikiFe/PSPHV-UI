@@ -136,18 +136,131 @@ async function fetchProposals() {
  * @param {Array} proposals - Array of proposal objects.
  */
 function renderProposals(proposals) {
-    proposalsTable.innerHTML = ''; // Clear existing
+    proposalsTable.innerHTML = ''; // Clear existing proposals
     proposals.forEach(proposal => {
         const row = proposalsTable.insertRow();
-        const numberCell = row.insertCell(0);
-        const titleCell = row.insertCell(1);
-        const partyCell = row.insertCell(2);
-
-        numberCell.innerText = proposal.proposalNumber;
-        titleCell.innerText = proposal.title;
-        partyCell.innerText = proposal.party;
+        row.dataset.proposalNumber = proposal.proposalNumber;
+        row.innerHTML = `
+            <td>${proposal.proposalNumber}</td>
+            <td class="proposal-title">${proposal.title}</td>
+            <td class="proposal-party">${proposal.party}</td>
+            <td class="actions-cell"></td>
+        `;
+        addProposalActions(proposal);
     });
 }
+
+/**
+ * Fetches proposals and users periodically to keep the UI updated.
+ */
+function refreshData() {
+    console.log("Refreshing proposals and users..."); // Debugging log
+
+    // Fetch and update proposals
+    fetchProposals().then(() => console.log("Proposals fetched successfully."))
+        .catch(error => console.error("Error fetching proposals:", error));
+
+    // Fetch and update users
+    fetchUsers().then(() => console.log("Users fetched successfully."))
+        .catch(error => console.error("Error fetching users:", error));
+}
+
+/**
+ * Starts polling every 2 seconds to update proposals and users.
+ */
+function startPolling() {
+    setInterval(refreshData, 2000); // Call refreshData every 2 seconds
+}
+
+
+async function removeProposal(proposalId) {
+    if (!confirm("Are you sure you want to remove this proposal?")) return;
+
+    try {
+        const response = await fetch(`/api/proposals/${proposalId}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (response.ok) {
+            showAlert("Proposal removed successfully!", "success");
+            fetchProposals(); // Refresh proposal list
+        } else {
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, "error");
+        }
+    } catch (error) {
+        console.error("Error removing proposal:", error);
+        showAlert("An error occurred while removing the proposal.", "error");
+    }
+}
+
+function openEditProposalWindow(proposalNumber) {
+    console.log("Editing proposal with number:", proposalNumber);
+
+    const modal = document.createElement('div');
+    modal.classList.add('modal');
+    modal.innerHTML = `
+        <div class="modal-content bg-gray-700 p-6 rounded">
+            <h2 class="text-xl font-bold mb-4">Edit Proposal</h2>
+            <label class="block mb-2">Title</label>
+            <input type="text" id="edit-proposal-title" class="w-full mb-4 px-3 py-2 rounded bg-gray-800 text-white">
+
+            <label class="block mb-2">Party</label>
+            <input type="text" id="edit-proposal-party" class="w-full mb-4 px-3 py-2 rounded bg-gray-800 text-white">
+
+            <button id="save-proposal" class="bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded">Save</button>
+            <button id="close-modal" class="bg-gray-500 hover:bg-gray-600 text-white py-2 px-4 rounded">Cancel</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    modal.querySelector('#close-modal').addEventListener('click', () => modal.remove());
+
+    fetch(`/api/proposals/${proposalNumber}`)
+        .then(response => response.json())
+        .then(proposal => {
+            document.getElementById('edit-proposal-title').value = proposal.title;
+            document.getElementById('edit-proposal-party').value = proposal.party;
+        })
+        .catch(error => {
+            console.error('Error fetching proposal data:', error);
+            showAlert("Failed to load proposal data.", "error");
+            modal.remove();
+        });
+
+    modal.querySelector('#save-proposal').addEventListener('click', async () => {
+        const updatedTitle = document.getElementById('edit-proposal-title').value.trim();
+        const updatedParty = document.getElementById('edit-proposal-party').value.trim();
+
+        await updateProposal(proposalNumber, updatedTitle, updatedParty);
+        modal.remove();
+    });
+}
+
+async function updateProposal(proposalNumber, title, party) {
+    try {
+        console.log("Updating proposal with number:", proposalNumber);
+
+        const response = await fetch(`/api/proposals/${proposalNumber}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, party })
+        });
+
+        if (response.ok) {
+            showAlert("Proposal updated successfully!", "success");
+            fetchProposals(); // Refresh proposal list
+        } else {
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, "error");
+        }
+    } catch (error) {
+        console.error("Error updating proposal:", error);
+        showAlert("An error occurred while updating the proposal.", "error");
+    }
+}
+
 
 /**
  * Fetches all users who are currently present.
@@ -533,9 +646,10 @@ addProposalButton.addEventListener('click', async () => {
 imposeFineButton.addEventListener('click', async () => {
     const username = fineUsername.value.trim();
     const amount = parseInt(fineAmount.value.trim(), 10);
+    const reason = document.getElementById('fine-reason').value.trim(); // Add reason field
 
-    if (!username || isNaN(amount) || amount <= 0) {
-        showAlert('Please enter a valid username and fine amount.', 'warning');
+    if (!username || isNaN(amount) || amount <= 0 || !reason) { // Validate reason as well
+        showAlert('Please enter a valid username, fine amount, and reason.', 'warning');
         return;
     }
 
@@ -543,13 +657,14 @@ imposeFineButton.addEventListener('click', async () => {
         const response = await fetch('/api/impose-fine', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, amount })
+            body: JSON.stringify({ username, amount, reason }) // Include reason in payload
         });
 
         if (response.ok) {
             showAlert('Fine imposed successfully!', 'success');
             fineUsername.value = '';
             fineAmount.value = '';
+            document.getElementById('fine-reason').value = ''; // Clear reason field
         } else {
             const errorText = await response.text();
             showAlert(`Error: ${errorText}`, 'error');
@@ -649,24 +764,21 @@ function handleSeatUpdate(user) {
  * Handles proposal updates received via WebSocket.
  * @param {Object} proposal - The new proposal object.
  */
-function handleProposalUpdate(proposal) {
-    // Assuming proposals are uniquely identified by proposalNumber
-    // Update or add the proposal in the table
-    const existingRow = Array.from(proposalsTable.rows).find(row => row.cells[0].innerText === proposal.proposalNumber);
-    if (existingRow) {
-        existingRow.cells[1].innerText = proposal.title;
-        existingRow.cells[2].innerText = proposal.party;
-    } else {
-        const row = proposalsTable.insertRow();
-        const numberCell = row.insertCell(0);
-        const titleCell = row.insertCell(1);
-        const partyCell = row.insertCell(2);
+function addProposalActions(proposal) {
+    const row = document.querySelector(`[data-proposal-number="${proposal.proposalNumber}"] .actions-cell`);
+    if (currentUser && currentUser.role === 'PRESIDENT') {
+        row.innerHTML = `
+            <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-number="${proposal.proposalNumber}">
+                Edit
+            </button>
+            <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-number="${proposal.proposalNumber}">
+                Remove
+            </button>
+        `;
 
-        numberCell.innerText = proposal.proposalNumber;
-        titleCell.innerText = proposal.title;
-        partyCell.innerText = proposal.party;
+        row.querySelector('.edit-proposal').addEventListener('click', () => openEditProposalWindow(proposal.proposalNumber));
+        row.querySelector('.remove-proposal').addEventListener('click', () => removeProposal(proposal.proposalNumber));
     }
-    showAlert(`New proposal added: "${proposal.title}"`, 'success');
 }
 
 /**
@@ -775,6 +887,9 @@ async function initializeApp() {
 
     // Initialize WebSocket
     initializeWebSocket();
+
+    // Start polling for data every 2 seconds
+    startPolling();
 }
 
 /**
@@ -830,6 +945,9 @@ async function checkAuthentication() {
 // ======================
 
 window.addEventListener('DOMContentLoaded', () => {
+    // Start polling for data immediately
+    startPolling();
+
     // Attach event listeners for tab switching
     loginTab.addEventListener('click', () => switchTab('login'));
     registerTab.addEventListener('click', () => switchTab('register'));

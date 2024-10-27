@@ -52,4 +52,12 @@ public class SeatWebSocket {
     public static void broadcast(JSONObject json) {
         broadcast(json.toString());
     }
+
+    public static void broadcastSeatStatusChange(String userId, String newStatus) {
+        JSONObject statusUpdate = new JSONObject();
+        statusUpdate.put("type", "seatStatusChange");
+        statusUpdate.put("userId", userId);
+        statusUpdate.put("seatStatus", newStatus);
+        broadcast(statusUpdate); // This sends the update to all connected clients
+    }
 }
