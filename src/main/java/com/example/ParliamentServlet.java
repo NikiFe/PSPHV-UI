@@ -20,18 +20,43 @@ import java.util.List;
 public class ParliamentServlet extends HttpServlet {
     private static final Logger logger = LoggerFactory.getLogger(ParliamentServlet.class);
 
+    private static boolean breakActive = false;
+
     private final MongoCollection<Document> usersCollection;
     private final MongoCollection<Document> proposalsCollection;
     private final MongoCollection<Document> fineReasonsCollection;
+    private final MongoCollection<Document> systemParametersCollection;
 
-    // Constructor to inject MongoDB collections
+    // Constructor modification to include systemParameters collection
     public ParliamentServlet() {
-        // Initialize MongoDB connection and get collections
         MongoDatabase database = MongoDBConnection.getDatabase();
         this.usersCollection = database.getCollection("users");
         this.proposalsCollection = database.getCollection("proposals");
         this.fineReasonsCollection = database.getCollection("fineReasons");
+        this.systemParametersCollection = database.getCollection("systemParameters");
+
+        // Ensure break status is initialized if missing
+        initializeBreakStatus();
     }
+
+    private void initializeBreakStatus() {
+        Document breakStatus = systemParametersCollection.find(Filters.eq("parameter", "breakStatus")).first();
+        if (breakStatus == null) {
+            systemParametersCollection.insertOne(new Document("parameter", "breakStatus").append("value", false));
+        }
+    }
+    private void setBreakStatus(boolean status) {
+        systemParametersCollection.updateOne(
+                Filters.eq("parameter", "breakStatus"),
+                new Document("$set", new Document("value", status))
+        );
+    }
+
+    private boolean isBreakActive() {
+        Document breakStatus = systemParametersCollection.find(Filters.eq("parameter", "breakStatus")).first();
+        return breakStatus != null && breakStatus.getBoolean("value", false);
+    }
+
 
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
@@ -59,6 +84,9 @@ public class ParliamentServlet extends HttpServlet {
             case "/break":
                 handleCallBreak(request, response);
                 break;
+            case "/end-break":
+                handleEndBreak(request, response);
+                break;
             case "/end-session":
                 handleEndSession(request, response);
                 break;
@@ -78,15 +106,17 @@ public class ParliamentServlet extends HttpServlet {
 
         if (path != null) {
             if (path.equals("/proposals")) {
-                handleGetProposals(request, response); // Fetch all proposals
+                handleGetProposals(request, response);
             } else if (path.startsWith("/proposals/")) {
-                handleGetProposalByNumber(request, response); // Fetch single proposal by number
+                handleGetProposalByNumber(request, response);
             } else if (path.equals("/users")) {
                 handleGetUsers(request, response);
             } else if (path.equals("/user-info")) {
                 handleUserInfo(request, response);
             } else if (path.equals("/queue")) {
                 handleGetQueue(request, response);
+            } else if (path.equals("/system/break-status")) {
+                handleGetBreakStatus(request, response);
             } else {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
                 logger.warn("Unknown GET endpoint: {}", path);
@@ -97,6 +127,12 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
+    private void handleGetBreakStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        JSONObject breakStatus = new JSONObject();
+        breakStatus.put("breakActive", isBreakActive());
+        response.getWriter().write(breakStatus.toString());
+    }
     private void handleGetProposalByNumber(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
             String proposalNumberStr = request.getPathInfo().split("/")[2]; // Extract proposal number from path
@@ -440,31 +476,15 @@ public class ParliamentServlet extends HttpServlet {
                 if (userDoc != null) {
                     String targetUsername = userDoc.getString("username");
 
-                    // If the requester is not the president and trying to update someone else's status, deny
-                    if (!"PRESIDENT".equals(requesterRole) && !targetUsername.equals(requesterUsername)) {
-                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "Cannot update other users' status.");
-                        logger.warn("User '{}' attempted to update status of '{}'. Forbidden.", requesterUsername, targetUsername);
+                    // Prevent users from canceling their own objection unless they are the president
+                    if ("OBJECTING".equals(userDoc.getString("seatStatus")) && "NEUTRAL".equals(newStatus) && !"PRESIDENT".equals(requesterRole)) {
+                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "Only the president can cancel an objection.");
+                        logger.warn("User '{}' attempted to cancel their own objection, which is not permitted.", requesterUsername);
                         return;
                     }
 
-                    // Validate newStatus
-                    if (!isValidSeatStatus(newStatus)) {
-                        response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid seat status.");
-                        logger.warn("Invalid seat status '{}' provided by user '{}'.", newStatus, requesterUsername);
-                        return;
-                    }
-
-                    // Prepare update document
-                    Document update;
-                    if ("NEUTRAL".equals(newStatus)) {
-                        // When setting to NEUTRAL, do NOT modify 'present'
-                        update = new Document("$set", new Document("seatStatus", "NEUTRAL"));
-                    } else {
-                        // When setting to any other status, ensure 'present' is true
-                        update = new Document("$set", new Document("seatStatus", newStatus).append("present", true));
-                    }
-
-                    // Update the user's seat status
+                    // Update status normally for other conditions
+                    Document update = new Document("$set", new Document("seatStatus", newStatus).append("present", true));
                     usersCollection.updateOne(query, update);
 
                     // Fetch updated user info
@@ -636,12 +656,13 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
-    // Handle calling a break (President only)
+    // Handle starting a break (President only)
     private void handleCallBreak(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
             HttpSession session = request.getSession(false);
             if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
-                // Broadcast break notification via WebSocket
+                setBreakStatus(true);  // Update MongoDB break status
+
                 JSONObject breakNotification = new JSONObject();
                 breakNotification.put("type", "break");
                 SeatWebSocket.broadcast(breakNotification);
@@ -660,6 +681,43 @@ public class ParliamentServlet extends HttpServlet {
             logger.error("Error during calling a break: ", e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while calling a break.");
         }
+    }
+
+    // Handle ending a break (President only)
+    private void handleEndBreak(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            HttpSession session = request.getSession(false);
+            if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
+                setBreakStatus(false);  // Update MongoDB break status
+
+                JSONObject endBreakNotification = new JSONObject();
+                endBreakNotification.put("type", "endBreak");
+                SeatWebSocket.broadcast(endBreakNotification);
+
+                response.setStatus(HttpServletResponse.SC_OK);
+                JSONObject resp = new JSONObject();
+                resp.put("message", "Break has ended.");
+                response.setContentType("application/json");
+                response.getWriter().write(resp.toString());
+                logger.info("President ended the break.");
+            } else {
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can end the break.");
+                logger.warn("Non-president attempted to end the break.");
+            }
+        } catch (Exception e) {
+            logger.error("Error during ending the break: ", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while ending the break.");
+        }
+    }
+
+    // Handle checking the break status
+    private void handleBreakStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        JSONObject breakStatusJson = new JSONObject();
+        breakStatusJson.put("breakActive", breakActive);
+
+        response.setContentType("application/json");
+        response.getWriter().write(breakStatusJson.toString());
+        logger.info("Fetched break status: {}", breakActive);
     }
 
     // Handle ending the session (President only)

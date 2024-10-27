@@ -28,6 +28,8 @@ const endSessionButton = document.getElementById('end-session');
 
 const alertContainer = document.getElementById('alert');
 const alertMessage = document.getElementById('alert-message');
+const breakOverlay = document.getElementById('break-overlay'); // Break overlay
+const endBreakButton = document.getElementById('end-break'); // End break button
 
 // ======================
 // State Variables
@@ -154,22 +156,17 @@ function renderProposals(proposals) {
  * Fetches proposals and users periodically to keep the UI updated.
  */
 function refreshData() {
-    console.log("Refreshing proposals and users..."); // Debugging log
-
-    // Fetch and update proposals
-    fetchProposals().then(() => console.log("Proposals fetched successfully."))
-        .catch(error => console.error("Error fetching proposals:", error));
-
-    // Fetch and update users
-    fetchUsers().then(() => console.log("Users fetched successfully."))
-        .catch(error => console.error("Error fetching users:", error));
+    console.log("Refreshing data...");
+    fetchProposals().catch(error => console.error("Error fetching proposals:", error));
+    fetchUsers().catch(error => console.error("Error fetching users:", error));
+    checkBreakStatus(); // Check break status as part of the regular polling cycle
 }
 
 /**
  * Starts polling every 2 seconds to update proposals and users.
  */
 function startPolling() {
-    setInterval(refreshData, 2000); // Call refreshData every 2 seconds
+    setInterval(refreshData, 500); // Poll data every 2 seconds
 }
 
 
@@ -295,71 +292,64 @@ function renderSeats(users) {
     });
 }
 
-/**
- * Adds or updates a seat in the seat layout.
- * @param {Object} user - User object.
- */
 function addOrUpdateSeat(user) {
     let seat = document.getElementById(`seat-${user.id}`);
 
     if (!seat) {
-        // Create new seat
+        // Create new seat element if it doesn't exist
         seat = document.createElement('div');
-        seat.classList.add('p-4', 'rounded-md', 'shadow', 'relative', 'bg-gray-700'); // Added bg-gray-700 as default
+        seat.classList.add('p-4', 'rounded-md', 'shadow', 'relative');
         seat.id = `seat-${user.id}`;
-
-        // Dynamic Background Color Based on Seat Status
-        updateSeatBackground(seat, user.seatStatus);
 
         seat.innerHTML = `
             <h3 class="text-lg font-semibold">${user.username}</h3>
             <p class="text-sm">Role: ${user.role}</p>
             <p class="text-sm">Party: ${user.partyAffiliation || 'N/A'}</p>
             <p class="text-sm">Fines: ${user.fines || 0}</p>
-            <div class="absolute top-2 right-2 space-x-2 user-actions">
+            <div class="user-actions space-x-2">
                 <button class="raise-hand bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-user-id="${user.id}" data-seat-status="${user.seatStatus}">
                     ${user.seatStatus === 'REQUESTING_TO_SPEAK' || user.seatStatus === 'OBJECTING' ? 'Cancel' : 'Raise Hand'}
                 </button>
                 <button class="object bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-user-id="${user.id}">
                     Object
                 </button>
-                <!-- President-specific buttons will be added dynamically -->
             </div>
         `;
 
         seatLayout.appendChild(seat);
 
-        // Attach Event Listeners to Buttons
+        // Attach event listeners to the buttons within the new seat
         const raiseHandButton = seat.querySelector('.raise-hand');
         const objectButton = seat.querySelector('.object');
 
         raiseHandButton.addEventListener('click', () => {
             const currentStatus = raiseHandButton.dataset.seatStatus;
             if (currentStatus === 'REQUESTING_TO_SPEAK' || currentStatus === 'OBJECTING') {
-                // Cancel hand
                 updateSeatStatus(user.id, 'NEUTRAL');
             } else {
-                // Raise hand
                 updateSeatStatus(user.id, 'REQUESTING_TO_SPEAK');
             }
         });
 
         objectButton.addEventListener('click', () => {
-            // Object
             updateSeatStatus(user.id, 'OBJECTING');
         });
 
-        // If the current user is the president, add controls to assign speaking
-        if (currentUser && currentUser.role === 'PRESIDENT') {
-            if (user.seatStatus === 'REQUESTING_TO_SPEAK' || user.seatStatus === 'OBJECTING') {
-                addPresidentControls(seat, user);
-            }
+        // Add president controls if the current user is the president and the user status requires it
+        if (currentUser && currentUser.role === 'PRESIDENT' && (user.seatStatus === 'REQUESTING_TO_SPEAK' || user.seatStatus === 'OBJECTING')) {
+            addPresidentControls(seat, user);
         }
-    } else {
-        // Update existing seat
-        updateSeat(seat, user);
     }
+
+    // Always apply background color based on the seat status
+    updateSeatBackground(seat, user.seatStatus);
 }
+
+/**
+ * Adds or updates a seat in the seat layout.
+ * @param {Object} user - User object.
+ */
+
 
 /**
  * Updates the seat's background color based on seat status.
@@ -367,7 +357,10 @@ function addOrUpdateSeat(user) {
  * @param {string} seatStatus - The current seat status.
  */
 function updateSeatBackground(seat, seatStatus) {
+    // Remove existing background color classes
     seat.classList.remove('bg-gray-700', 'bg-yellow-500', 'bg-red-500', 'bg-green-500');
+
+    // Add the appropriate class based on seat status
     switch (seatStatus) {
         case 'REQUESTING_TO_SPEAK':
             seat.classList.add('bg-yellow-500');
@@ -464,11 +457,7 @@ async function updateSeatStatus(userId, status) {
         let present = true; // Assume the user remains present
 
         // If status indicates leaving, set present to false
-        // In this case, 'NEUTRAL' does not imply leaving
-        // Only 'LEAVING' or similar statuses should set present to false
-        // Modify accordingly based on your application's logic
-
-        const isLeaving = status === 'LEAVING'; // Adjust based on your application's logic
+        const isLeaving = status === 'LEAVING';
         if (isLeaving) {
             present = false;
         }
@@ -506,6 +495,9 @@ async function updateSeatStatus(userId, status) {
                     message = 'Seat status updated successfully!';
             }
             showAlert(message, 'success');
+        } else if (response.status === 403) {
+            // Display error if the user is not authorized to cancel an objection
+            showAlert('Only the president can cancel an objection.', 'error');
         } else {
             const errorText = await response.text();
             showAlert(`Error: ${errorText}`, 'error');
@@ -548,6 +540,46 @@ loginForm.addEventListener('submit', async (e) => {
         showAlert('An error occurred during login.', 'error');
     }
 });
+
+function toggleBreakOverlay(isBreak) {
+    console.log("toggleBreakOverlay called with isBreak:", isBreak);
+    if (isBreak && currentUser.role !== 'PRESIDENT') {
+        breakOverlay.classList.remove('hidden');
+        mainContainer.classList.add('hidden');
+    } else {
+        breakOverlay.classList.add('hidden');
+        mainContainer.classList.remove('hidden');
+    }
+}
+endBreakButton.addEventListener('click', async () => {
+    try {
+        const response = await fetch('/api/end-break', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (response.ok) {
+            showAlert('Break has ended.', 'success');
+            document.getElementById('end-break').classList.add('hidden'); // Hide End Break button
+            document.getElementById('break-overlay').classList.add('hidden'); // Hide the break overlay
+        } else {
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error ending break:', error);
+        showAlert('An error occurred while ending the break.', 'error');
+    }
+});
+function handleBreak() {
+    if (currentUser.role !== 'PRESIDENT') {
+        toggleBreakOverlay(true);
+    }
+}
+
+function handleEndBreak() {
+    toggleBreakOverlay(false);
+}
 
 /**
  * Handles the Registration form submission.
@@ -687,6 +719,7 @@ callBreakButton.addEventListener('click', async () => {
 
         if (response.ok) {
             showAlert('Break has been called.', 'success');
+            document.getElementById('end-break').classList.remove('hidden'); // Show End Break button for president
         } else {
             const errorText = await response.text();
             showAlert(`Error: ${errorText}`, 'error');
@@ -791,19 +824,30 @@ function handleFineImposed(username, amount) {
 }
 
 /**
- * Handles break notifications received via WebSocket.
- */
-function handleBreak() {
-    alert('A break has been called.');
-}
-
-/**
  * Handles session end notifications received via WebSocket.
  */
 function handleEndSession() {
     alert('The session has been ended.');
     resetApp();
 }
+
+async function checkBreakStatus() {
+    try {
+        const response = await fetch('/api/system/break-status');
+        const data = await response.json();
+
+        toggleBreakOverlay(data.breakActive);  // Ensure this is called
+
+        if (data.breakActive && currentUser.role === 'PRESIDENT') {
+            endBreakButton.classList.remove('hidden'); // Show for president
+        } else {
+            endBreakButton.classList.add('hidden');
+        }
+    } catch (error) {
+        console.error('Error fetching break status:', error);
+    }
+}
+
 
 // ======================
 // WebSocket Initialization
@@ -840,6 +884,9 @@ function initializeWebSocket() {
                 case 'break':
                     handleBreak();
                     break;
+                case 'endBreak':
+                    handleEndBreak();
+                    break;
                 case 'endSession':
                     handleEndSession();
                     break;
@@ -873,7 +920,6 @@ async function initializeApp() {
     authContainer.classList.add('hidden');
     mainContainer.classList.remove('hidden');
 
-    // Fetch User Info to determine role
     currentUser = await fetchUserInfo();
     if (currentUser && currentUser.role === 'PRESIDENT') {
         presidentActions.classList.remove('hidden');
@@ -881,14 +927,10 @@ async function initializeApp() {
         presidentActions.classList.add('hidden');
     }
 
-    // Fetch Initial Data
+    await checkBreakStatus();  // Check if break is active on initialization
     await fetchProposals();
     await fetchUsers();
-
-    // Initialize WebSocket
     initializeWebSocket();
-
-    // Start polling for data every 2 seconds
     startPolling();
 }
 
