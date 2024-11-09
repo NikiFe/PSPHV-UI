@@ -6,6 +6,7 @@ import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Updates;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.bson.types.ObjectId; // Import ObjectId
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -23,14 +24,11 @@ import static com.mongodb.client.model.Filters.eq;
 public class ParliamentServlet extends HttpServlet {
     private static final Logger logger = LoggerFactory.getLogger(ParliamentServlet.class);
 
-    private static boolean breakActive = false;
-
     private final MongoCollection<Document> usersCollection;
     private final MongoCollection<Document> proposalsCollection;
     private final MongoCollection<Document> fineReasonsCollection;
     private final MongoCollection<Document> systemParametersCollection;
 
-    // Constructor modification to include systemParameters collection
     public ParliamentServlet() {
         MongoDatabase database = MongoDBConnection.getDatabase();
         this.usersCollection = database.getCollection("users");
@@ -48,6 +46,7 @@ public class ParliamentServlet extends HttpServlet {
             systemParametersCollection.insertOne(new Document("parameter", "breakStatus").append("value", false));
         }
     }
+
     private void setBreakStatus(boolean status) {
         systemParametersCollection.updateOne(
                 Filters.eq("parameter", "breakStatus"),
@@ -59,7 +58,6 @@ public class ParliamentServlet extends HttpServlet {
         Document breakStatus = systemParametersCollection.find(Filters.eq("parameter", "breakStatus")).first();
         return breakStatus != null && breakStatus.getBoolean("value", false);
     }
-
 
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
@@ -93,7 +91,7 @@ public class ParliamentServlet extends HttpServlet {
             case "/end-session":
                 handleEndSession(request, response);
                 break;
-            case "/register": // Handle registration
+            case "/register":
                 handleRegister(request, response);
                 break;
             default:
@@ -111,7 +109,7 @@ public class ParliamentServlet extends HttpServlet {
             if (path.equals("/proposals")) {
                 handleGetProposals(request, response);
             } else if (path.startsWith("/proposals/")) {
-                handleGetProposalByNumber(request, response);
+                handleGetProposalById(request, response);
             } else if (path.equals("/users")) {
                 handleGetUsers(request, response);
             } else if (path.equals("/user-info")) {
@@ -136,30 +134,35 @@ public class ParliamentServlet extends HttpServlet {
         breakStatus.put("breakActive", isBreakActive());
         response.getWriter().write(breakStatus.toString());
     }
-    private void handleGetProposalByNumber(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        try {
-            String proposalNumberStr = request.getPathInfo().split("/")[2]; // Extract proposal number from path
-            int proposalNumber = Integer.parseInt(proposalNumberStr);
 
-            // Find the proposal with the given proposalNumber
-            Document proposal = proposalsCollection.find(new Document("proposalNumber", proposalNumber)).first();
+    // Updated method to fetch proposal by ID
+    private void handleGetProposalById(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            String proposalId = request.getPathInfo().split("/")[2]; // Extract proposal ID from path
+
+            // Find the proposal with the given ID
+            Document proposal = proposalsCollection.find(eq("_id", new ObjectId(proposalId))).first();
 
             if (proposal != null) {
                 JSONObject proposalJson = new JSONObject(proposal.toJson());
-                proposalJson.put("proposalNumber", proposal.getInteger("proposalNumber"));
+
+                // Convert '_id' to 'id' and remove '_id'
+                String id = proposal.getObjectId("_id").toHexString();
+                proposalJson.put("id", id);
+                proposalJson.remove("_id");
 
                 response.setContentType("application/json");
                 response.getWriter().write(proposalJson.toString());
-                logger.info("Fetched proposal with number '{}'.", proposalNumber);
+                logger.info("Fetched proposal with id '{}'.", proposalId);
             } else {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND, "Proposal not found.");
-                logger.warn("Proposal with number '{}' not found.", proposalNumber);
+                logger.warn("Proposal with id '{}' not found.", proposalId);
             }
-        } catch (NumberFormatException e) {
-            logger.error("Invalid proposal number format: {}", e.getMessage());
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal number format.");
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid proposal ID format: {}", e.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID format.");
         } catch (Exception e) {
-            logger.error("Error during fetching proposal by number: ", e);
+            logger.error("Error during fetching proposal by id: ", e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while fetching the proposal.");
         }
     }
@@ -223,8 +226,6 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
-    // ParliamentServlet.java
-
     @Override
     protected void doDelete(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = request.getPathInfo();
@@ -236,13 +237,15 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
+    // Updated method to delete proposal by ID
     private void handleDeleteProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
         HttpSession session = request.getSession(false);
         if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
-            String proposalNumber = request.getPathInfo().split("/")[2]; // Extract proposalNumber from path
+            String proposalId = request.getPathInfo().split("/")[2]; // Extract proposalId from path
 
             try {
-                Document query = new Document("proposalNumber", Integer.parseInt(proposalNumber));
+                // Create a query using the ObjectId
+                Document query = new Document("_id", new ObjectId(proposalId));
                 proposalsCollection.deleteOne(query);
 
                 response.setStatus(HttpServletResponse.SC_OK);
@@ -250,10 +253,10 @@ public class ParliamentServlet extends HttpServlet {
                 resp.put("message", "Proposal deleted successfully.");
                 response.setContentType("application/json");
                 response.getWriter().write(resp.toString());
-                logger.info("President deleted proposal with number '{}'.", proposalNumber);
-            } catch (NumberFormatException e) {
-                logger.error("Invalid proposal number format: {}", proposalNumber);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal number format.");
+                logger.info("President deleted proposal with id '{}'.", proposalId);
+            } catch (IllegalArgumentException e) {
+                logger.error("Invalid proposal ID format: {}", proposalId);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID format.");
             } catch (Exception e) {
                 logger.error("Error deleting proposal: ", e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while deleting the proposal.");
@@ -262,7 +265,6 @@ public class ParliamentServlet extends HttpServlet {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can delete proposals.");
         }
     }
-
 
     @Override
     protected void doPut(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -275,14 +277,13 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
+    // Updated method to update proposal by ID
     private void handleUpdateProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
         HttpSession session = request.getSession(false);
         if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
-            String proposalNumber = request.getPathInfo().split("/")[2]; // Extract proposalNumber from path
+            String proposalId = request.getPathInfo().split("/")[2]; // Extract proposalId from path
 
             try {
-                int parsedProposalNumber = Integer.parseInt(proposalNumber);
-
                 // Parse JSON payload
                 StringBuilder sb = new StringBuilder();
                 String line;
@@ -299,7 +300,8 @@ public class ParliamentServlet extends HttpServlet {
                     return;
                 }
 
-                Document query = new Document("proposalNumber", parsedProposalNumber);
+                // Create a query using the ObjectId
+                Document query = new Document("_id", new ObjectId(proposalId));
                 Document update = new Document("$set", new Document("title", title).append("party", party));
                 proposalsCollection.updateOne(query, update);
 
@@ -308,10 +310,10 @@ public class ParliamentServlet extends HttpServlet {
                 resp.put("message", "Proposal updated successfully.");
                 response.setContentType("application/json");
                 response.getWriter().write(resp.toString());
-                logger.info("President updated proposal with number '{}'.", proposalNumber);
-            } catch (NumberFormatException e) {
-                logger.error("Invalid proposal number format: {}", proposalNumber);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal number format.");
+                logger.info("President updated proposal with id '{}'.", proposalId);
+            } catch (IllegalArgumentException e) {
+                logger.error("Invalid proposal ID format: {}", proposalId);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID format.");
             } catch (Exception e) {
                 logger.error("Error updating proposal: ", e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while updating the proposal.");
@@ -320,9 +322,6 @@ public class ParliamentServlet extends HttpServlet {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can update proposals.");
         }
     }
-
-
-
 
     // Handle user login
     private void handleLogin(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -426,7 +425,8 @@ public class ParliamentServlet extends HttpServlet {
                     // Fetch updated user info
                     Document updatedUserDoc = usersCollection.find(query).first();
                     JSONObject userJson = new JSONObject(updatedUserDoc.toJson());
-                    userJson.put("id", updatedUserDoc.getObjectId("_id").toString());
+                    userJson.put("id", updatedUserDoc.getObjectId("_id").toHexString());
+                    userJson.remove("_id");
 
                     // Broadcast seat update via WebSocket
                     JSONObject seatUpdate = new JSONObject();
@@ -473,7 +473,7 @@ public class ParliamentServlet extends HttpServlet {
                 String newStatus = statusUpdate.getString("seatStatus");
 
                 // Fetch the target user by ID
-                Document query = new Document("_id", new org.bson.types.ObjectId(userId));
+                Document query = new Document("_id", new ObjectId(userId));
                 Document userDoc = usersCollection.find(query).first();
 
                 if (userDoc != null) {
@@ -500,7 +500,8 @@ public class ParliamentServlet extends HttpServlet {
                     // Broadcast the update
                     Document updatedUserDoc = usersCollection.find(query).first();
                     JSONObject userJson = new JSONObject(updatedUserDoc.toJson());
-                    userJson.put("id", updatedUserDoc.getObjectId("_id").toString());
+                    userJson.put("id", updatedUserDoc.getObjectId("_id").toHexString());
+                    userJson.remove("_id");
 
                     JSONObject seatUpdate = new JSONObject();
                     seatUpdate.put("type", "seatUpdate");
@@ -549,17 +550,16 @@ public class ParliamentServlet extends HttpServlet {
                 JSONObject proposalJson = new JSONObject(sb.toString());
                 String title = proposalJson.getString("title").trim();
                 String party = proposalJson.optString("party", "President").trim(); // Default party is President
-                Boolean priority = proposalJson.optBoolean("priority", false); // Default party is President
-                String type = proposalJson.optString("type", "Normal").trim(); // Default party is President
-                String associatedProposal = proposalJson.optString("assProposal").trim(); // Default party is President
+                Boolean priority = proposalJson.optBoolean("priority", false);
+                String type = proposalJson.optString("type", "normal").trim();
+                String associatedProposal = proposalJson.optString("assProposal").trim();
 
                 int nextProposalNumber = getNextProposalNumber(priority);
 
-                String proposalVisual = (priority?"P":"") +
+                String proposalVisual = (priority ? "P" : "") +
                         nextProposalNumber +
-                        (type.equals("additive")?" → ":type.equals("countering")?" x ":"") +
-                        associatedProposal
-                        ;
+                        (type.equals("additive") ? " → " : type.equals("countering") ? " x " : "") +
+                        associatedProposal;
 
                 if (title.isEmpty()) {
                     response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal title cannot be empty.");
@@ -567,30 +567,42 @@ public class ParliamentServlet extends HttpServlet {
                     return;
                 }
 
-                // Assign proposal number
-
                 // Save the proposal to the database
                 Document proposalDoc = new Document("title", title)
                         .append("proposalNumber", nextProposalNumber)
                         .append("party", party)
-                        .append("isPriority",priority)
-                        .append("associationType",type)
-                        .append("referencedProposal",associatedProposal)
-                        .append("proposalVisual",proposalVisual);
+                        .append("isPriority", priority)
+                        .append("associationType", type)
+                        .append("referencedProposal", associatedProposal)
+                        .append("proposalVisual", proposalVisual);
                 proposalsCollection.insertOne(proposalDoc);
 
-                // Broadcast proposal update via WebSocket
-                JSONObject proposalUpdate = new JSONObject();
-                proposalUpdate.put("type", "proposalUpdate");
-                proposalUpdate.put("proposal", new JSONObject(proposalDoc.toJson()));
-                SeatWebSocket.broadcast(proposalUpdate);
+                // Fetch the inserted proposal to get the '_id'
+                Document insertedProposal = proposalsCollection.find(eq("proposalNumber", nextProposalNumber)).first();
 
-                response.setStatus(HttpServletResponse.SC_OK);
-                JSONObject resp = new JSONObject();
-                resp.put("message", "New proposal added successfully.");
-                response.setContentType("application/json");
-                response.getWriter().write(resp.toString());
-                logger.info("President added new proposal: '{}'", title);
+                if (insertedProposal != null) {
+                    JSONObject insertedProposalJson = new JSONObject(insertedProposal.toJson());
+
+                    // Convert '_id' to 'id' and remove '_id'
+                    String id = insertedProposal.getObjectId("_id").toHexString();
+                    insertedProposalJson.put("id", id);
+                    insertedProposalJson.remove("_id");
+
+                    // Broadcast proposal update via WebSocket
+                    JSONObject proposalUpdate = new JSONObject();
+                    proposalUpdate.put("type", "proposalUpdate");
+                    proposalUpdate.put("proposal", insertedProposalJson);
+                    SeatWebSocket.broadcast(proposalUpdate);
+
+                    response.setStatus(HttpServletResponse.SC_OK);
+                    JSONObject resp = new JSONObject();
+                    resp.put("message", "New proposal added successfully.");
+                    response.setContentType("application/json");
+                    response.getWriter().write(resp.toString());
+                    logger.info("President added new proposal: '{}'", title);
+                } else {
+                    response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to retrieve inserted proposal.");
+                }
             } else {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can add proposals.");
                 logger.warn("Non-president attempted to add a new proposal.");
@@ -638,8 +650,8 @@ public class ParliamentServlet extends HttpServlet {
                     // Update user's fines
                     usersCollection.updateOne(query, Updates.inc("fines", amount));
 
-                    // Generate a unique fineId (e.g., UUID)
-                    String fineId = "FINE-" + System.currentTimeMillis(); // Simple example, consider using UUID for uniqueness
+                    // Generate a unique fineId
+                    String fineId = "FINE-" + System.currentTimeMillis();
 
                     // Store fine reason in 'fineReasons' collection
                     Document fineReasonDoc = new Document("fineId", fineId)
@@ -733,16 +745,6 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
-    // Handle checking the break status
-    private void handleBreakStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        JSONObject breakStatusJson = new JSONObject();
-        breakStatusJson.put("breakActive", breakActive);
-
-        response.setContentType("application/json");
-        response.getWriter().write(breakStatusJson.toString());
-        logger.info("Fetched break status: {}", breakActive);
-    }
-
     // Handle ending the session (President only)
     private void handleEndSession(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
@@ -782,7 +784,8 @@ public class ParliamentServlet extends HttpServlet {
             for (Document doc : users) {
                 JSONObject userJson = new JSONObject(doc.toJson());
                 userJson.remove("password"); // Remove sensitive information
-                userJson.put("id", doc.getObjectId("_id").toString());
+                userJson.put("id", doc.getObjectId("_id").toHexString());
+                userJson.remove("_id");
                 usersArray.put(userJson);
             }
 
@@ -826,7 +829,7 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
-    // Handle fetching all proposals
+    // Updated method to fetch all proposals
     private void handleGetProposals(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
             List<Document> proposals = proposalsCollection.find().into(new ArrayList<>());
@@ -834,7 +837,12 @@ public class ParliamentServlet extends HttpServlet {
             JSONArray proposalsArray = new JSONArray();
             for (Document doc : proposals) {
                 JSONObject proposalJson = new JSONObject(doc.toJson());
-                proposalJson.put("proposalNumber", doc.getInteger("proposalNumber"));
+
+                // Convert '_id' to 'id' and remove '_id'
+                String id = doc.getObjectId("_id").toHexString();
+                proposalJson.put("id", id);
+                proposalJson.remove("_id");
+
                 proposalsArray.put(proposalJson);
             }
 
@@ -846,7 +854,6 @@ public class ParliamentServlet extends HttpServlet {
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while fetching proposals.");
         }
     }
-
 
     // Handle fetching the speaking queue
     private void handleGetQueue(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -875,9 +882,7 @@ public class ParliamentServlet extends HttpServlet {
     // Helper method to get the next proposal number
     private int getNextProposalNumber(Boolean priority) {
         Bson filter = eq("isPriority", priority);
-        System.out.println("HELP");
-        int counter = (int)proposalsCollection.countDocuments(filter);
-        System.out.println(counter);
-        return counter+1;
+        int counter = (int) proposalsCollection.countDocuments(filter);
+        return counter + 1;
     }
 }

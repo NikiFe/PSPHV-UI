@@ -145,7 +145,7 @@ function renderProposals(proposals) {
     proposalsTable.innerHTML = ''; // Clear existing proposals
     proposals.forEach(proposal => {
         const row = proposalsTable.insertRow();
-        row.dataset.proposalId = proposal.id;
+        row.dataset.proposalId = proposal.id; // Use 'proposal.id'
         row.innerHTML = `
             <td>${proposal.proposalVisual}</td>
             <td class="proposal-title">${proposal.title}</td>
@@ -167,12 +167,11 @@ function refreshData() {
 }
 
 /**
- * Starts polling every 2 seconds to update proposals and users.
+ * Starts polling every 1 second to update proposals and users.
  */
 function startPolling() {
-    setInterval(refreshData, 1000); // Poll data every 2 seconds
+    setInterval(refreshData, 1000); // Poll data every 1 second
 }
-
 
 async function removeProposal(proposalId) {
     if (!confirm("Are you sure you want to remove this proposal?")) return;
@@ -261,7 +260,6 @@ async function updateProposal(proposalId, title, party) {
         showAlert("An error occurred while updating the proposal.", "error");
     }
 }
-
 
 /**
  * Fetches all users who are currently present.
@@ -372,65 +370,6 @@ function updateSeatBackground(seat, seatStatus) {
         default:
             seat.classList.add('bg-gray-700');
     }
-}
-
-/**
- * Updates an existing seat's information.
- * @param {HTMLElement} seat - The seat element.
- * @param {Object} user - User object.
- */
-function updateSeat(seat, user) {
-    // Update background color
-    updateSeatBackground(seat, user.seatStatus);
-
-    // Update user details
-    seat.querySelector('h3').innerText = user.username;
-    seat.querySelector('p:nth-child(2)').innerText = `Role: ${user.role}`;
-    seat.querySelector('p:nth-child(3)').innerText = `Party: ${user.partyAffiliation || 'N/A'}`;
-    seat.querySelector('p:nth-child(4)').innerText = `Fines: ${user.fines || 0}`;
-
-    // Update the Raise Hand button label and data-seat-status
-    const raiseHandButton = seat.querySelector('.raise-hand');
-    if (user.seatStatus === 'REQUESTING_TO_SPEAK' || user.seatStatus === 'OBJECTING') {
-        raiseHandButton.textContent = 'Cancel';
-    } else {
-        raiseHandButton.textContent = 'Raise Hand';
-    }
-    raiseHandButton.dataset.seatStatus = user.seatStatus;
-
-    // Remove existing president controls if any
-    const existingControls = seat.querySelectorAll('.give-speaking');
-    existingControls.forEach(control => control.remove());
-
-    // Add president controls if necessary
-    if (currentUser && currentUser.role === 'PRESIDENT') {
-        if (user.seatStatus === 'REQUESTING_TO_SPEAK' || user.seatStatus === 'OBJECTING') {
-            addPresidentControls(seat, user);
-        }
-    }
-}
-
-/**
- * Adds presidential controls ("Give Speaking" button) to a user's seat.
- * @param {HTMLElement} seat - The seat element.
- * @param {Object} user - User object.
- */
-function addPresidentControls(seat, user) {
-    const userActions = seat.querySelector('.user-actions');
-
-    // Create "Give Speaking" Button
-    const giveSpeakingButton = document.createElement('button');
-    giveSpeakingButton.classList.add('give-speaking', 'bg-green-500', 'hover:bg-green-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
-    giveSpeakingButton.textContent = 'Give Speaking';
-    giveSpeakingButton.dataset.userId = user.id;
-
-    // Append to user actions
-    userActions.appendChild(giveSpeakingButton);
-
-    // Attach Event Listener
-    giveSpeakingButton.addEventListener('click', () => {
-        updateSeatStatus(user.id, 'SPEAKING');
-    });
 }
 
 /**
@@ -639,10 +578,10 @@ logoutButton.addEventListener('click', async () => {
 
 function controlAssProposal(){
     if (newProposalAssociationType.value.trim().localeCompare('normal') === 0){
-        newAssociatedProposal.disabled = 1;
+        newAssociatedProposal.disabled = true;
     }
     else {
-        newAssociatedProposal.disabled = 0;
+        newAssociatedProposal.disabled = false;
     }
 }
 
@@ -665,15 +604,14 @@ addProposalButton.addEventListener('click', async () => {
         const response = await fetch('/api/proposals', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, party, priority,type,assProposal})
+            body: JSON.stringify({ title, party, priority, type, assProposal })
         });
 
         if (response.ok) {
             showAlert('Proposal added successfully!', 'success');
             newProposalTitle.value = '';
             newProposalParty.value = '';
-            newProposalPriority.checked = 0;
-            newAssociatedProposal.disabled = 1;
+            newProposalPriority.checked = false;
             newProposalAssociationType.value = 'normal';
             newAssociatedProposal.value = '';
 
@@ -877,7 +815,6 @@ async function checkBreakStatus() {
         console.error('Error fetching break status:', error);
     }
 }
-
 
 // ======================
 // WebSocket Initialization
