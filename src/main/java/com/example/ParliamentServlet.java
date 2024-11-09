@@ -16,7 +16,6 @@ import javax.servlet.ServletException;
 import javax.servlet.http.*;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 
@@ -557,12 +556,10 @@ public class ParliamentServlet extends HttpServlet {
 
                 int nextProposalNumber = getNextProposalNumber(priority);
 
-                String associatedProposalVisual = getVisual(associatedProposal);
-
                 String proposalVisual = (priority ? "P" : "") +
                         nextProposalNumber +
                         (type.equals("additive") ? " → " : type.equals("countering") ? " x " : "") +
-                        associatedProposalVisual;
+                        associatedProposal;
 
                 if (title.isEmpty()) {
                     response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal title cannot be empty.");
@@ -615,10 +612,7 @@ public class ParliamentServlet extends HttpServlet {
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while adding the proposal.");
         }
     }
-    private String getVisual(String proposal){
-        Bson filter = eq(proposal);
-        return proposalsCollection.find(filter).first().getString("proposalVisual");
-    }
+
     // Handle imposing a fine on a user (President only)
     private void handleImposeFine(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
@@ -696,7 +690,6 @@ public class ParliamentServlet extends HttpServlet {
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while imposing the fine.");
         }
     }
-
 
     // Handle starting a break (President only)
     private void handleCallBreak(HttpServletRequest request, HttpServletResponse response) throws IOException {
