@@ -20,6 +20,10 @@ const presidentActions = document.getElementById('president-actions');
 const addProposalButton = document.getElementById('add-proposal');
 const newProposalTitle = document.getElementById('new-proposal-title');
 const newProposalParty = document.getElementById('new-proposal-party');
+const newProposalPriority = document.getElementById('new-proposal-priority');
+const newProposalAssociationType = document.getElementById('new-proposal-association-type');
+const newAssociatedProposal = document.getElementById('new-associated-proposal');
+
 const imposeFineButton = document.getElementById('impose-fine');
 const fineUsername = document.getElementById('fine-username');
 const fineAmount = document.getElementById('fine-amount');
@@ -141,14 +145,14 @@ function renderProposals(proposals) {
     proposalsTable.innerHTML = ''; // Clear existing proposals
     proposals.forEach(proposal => {
         const row = proposalsTable.insertRow();
-        row.dataset.proposalNumber = proposal.proposalNumber;
+        row.dataset.proposalId = proposal.id;
         row.innerHTML = `
-            <td>${proposal.proposalNumber}</td>
+            <td>${proposal.proposalVisual}</td>
             <td class="proposal-title">${proposal.title}</td>
             <td class="proposal-party">${proposal.party}</td>
             <td class="actions-cell"></td>
         `;
-        addProposalActions(proposal);
+        addProposalActions(proposal, row); // Pass the row directly
     });
 }
 
@@ -192,8 +196,8 @@ async function removeProposal(proposalId) {
     }
 }
 
-function openEditProposalWindow(proposalNumber) {
-    console.log("Editing proposal with number:", proposalNumber);
+function openEditProposalWindow(proposalId) {
+    console.log("Editing proposal with id:", proposalId);
 
     const modal = document.createElement('div');
     modal.classList.add('modal');
@@ -214,7 +218,7 @@ function openEditProposalWindow(proposalNumber) {
 
     modal.querySelector('#close-modal').addEventListener('click', () => modal.remove());
 
-    fetch(`/api/proposals/${proposalNumber}`)
+    fetch(`/api/proposals/${proposalId}`)
         .then(response => response.json())
         .then(proposal => {
             document.getElementById('edit-proposal-title').value = proposal.title;
@@ -230,16 +234,16 @@ function openEditProposalWindow(proposalNumber) {
         const updatedTitle = document.getElementById('edit-proposal-title').value.trim();
         const updatedParty = document.getElementById('edit-proposal-party').value.trim();
 
-        await updateProposal(proposalNumber, updatedTitle, updatedParty);
+        await updateProposal(proposalId, updatedTitle, updatedParty);
         modal.remove();
     });
 }
 
-async function updateProposal(proposalNumber, title, party) {
+async function updateProposal(proposalId, title, party) {
     try {
-        console.log("Updating proposal with number:", proposalNumber);
+        console.log("Updating proposal with id:", proposalId);
 
-        const response = await fetch(`/api/proposals/${proposalNumber}`, {
+        const response = await fetch(`/api/proposals/${proposalId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title, party })
@@ -344,12 +348,6 @@ function addOrUpdateSeat(user) {
     // Always apply background color based on the seat status
     updateSeatBackground(seat, user.seatStatus);
 }
-
-/**
- * Adds or updates a seat in the seat layout.
- * @param {Object} user - User object.
- */
-
 
 /**
  * Updates the seat's background color based on seat status.
@@ -639,12 +637,24 @@ logoutButton.addEventListener('click', async () => {
     }
 });
 
+function controlAssProposal(){
+    if (newProposalAssociationType.value.trim().localeCompare('normal') === 0){
+        newAssociatedProposal.disabled = 1;
+    }
+    else {
+        newAssociatedProposal.disabled = 0;
+    }
+}
+
 /**
  * Adds a new proposal via Presidential Action.
  */
 addProposalButton.addEventListener('click', async () => {
     const title = newProposalTitle.value.trim();
     const party = newProposalParty.value.trim();
+    const priority = newProposalPriority.checked;
+    const type = newProposalAssociationType.value.trim();
+    const assProposal = newAssociatedProposal.value.trim();
 
     if (!title || !party) {
         showAlert('Proposal title and proposing party cannot be empty.', 'warning');
@@ -655,13 +665,18 @@ addProposalButton.addEventListener('click', async () => {
         const response = await fetch('/api/proposals', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, party })
+            body: JSON.stringify({ title, party, priority,type,assProposal})
         });
 
         if (response.ok) {
             showAlert('Proposal added successfully!', 'success');
             newProposalTitle.value = '';
             newProposalParty.value = '';
+            newProposalPriority.checked = 0;
+            newAssociatedProposal.disabled = 1;
+            newProposalAssociationType.value = 'normal';
+            newAssociatedProposal.value = '';
+
         } else {
             const errorText = await response.text();
             showAlert(`Error: ${errorText}`, 'error');
@@ -737,19 +752,19 @@ endSessionButton.addEventListener('click', async () => {
     if (!confirm('Are you sure you want to end the session?')) return;
 
     try {
-            const response = await fetch('/api/end-break', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-            });
+        const response = await fetch('/api/end-break', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
 
-            if (response.ok) {
-                showAlert('Break has ended.', 'success');
-                document.getElementById('end-break').classList.add('hidden'); // Hide End Break button
-                document.getElementById('break-overlay').classList.add('hidden'); // Hide the break overlay
-            } else {
-                const errorText = await response.text();
-                showAlert(`Error: ${errorText}`, 'error');
-            }
+        if (response.ok) {
+            showAlert('Break has ended.', 'success');
+            document.getElementById('end-break').classList.add('hidden'); // Hide End Break button
+            document.getElementById('break-overlay').classList.add('hidden'); // Hide the break overlay
+        } else {
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, 'error');
+        }
         const response1 = await fetch('/api/end-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
@@ -807,23 +822,24 @@ function handleSeatUpdate(user) {
 }
 
 /**
- * Handles proposal updates received via WebSocket.
- * @param {Object} proposal - The new proposal object.
+ * Adds action buttons to proposals and attaches event listeners.
+ * @param {Object} proposal - The proposal object.
+ * @param {HTMLElement} row - The table row element for the proposal.
  */
-function addProposalActions(proposal) {
-    const row = document.querySelector(`[data-proposal-number="${proposal.proposalNumber}"] .actions-cell`);
+function addProposalActions(proposal, row) {
+    const actionsCell = row.querySelector('.actions-cell');
     if (currentUser && currentUser.role === 'PRESIDENT') {
-        row.innerHTML = `
-            <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-number="${proposal.proposalNumber}">
+        actionsCell.innerHTML = `
+            <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">
                 Edit
             </button>
-            <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-number="${proposal.proposalNumber}">
+            <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">
                 Remove
             </button>
         `;
 
-        row.querySelector('.edit-proposal').addEventListener('click', () => openEditProposalWindow(proposal.proposalNumber));
-        row.querySelector('.remove-proposal').addEventListener('click', () => removeProposal(proposal.proposalNumber));
+        actionsCell.querySelector('.edit-proposal').addEventListener('click', () => openEditProposalWindow(proposal.id));
+        actionsCell.querySelector('.remove-proposal').addEventListener('click', () => removeProposal(proposal.id));
     }
 }
 
@@ -888,9 +904,6 @@ function initializeWebSocket() {
             switch (message.type) {
                 case 'seatUpdate':
                     handleSeatUpdate(message.user);
-                    break;
-                case 'proposalUpdate':
-                    handleProposalUpdate(message.proposal);
                     break;
                 case 'fineImposed':
                     handleFineImposed(message.username, message.amount);

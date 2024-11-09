@@ -5,6 +5,7 @@ import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Updates;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -16,6 +17,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+
+import static com.mongodb.client.model.Filters.eq;
 
 public class ParliamentServlet extends HttpServlet {
     private static final Logger logger = LoggerFactory.getLogger(ParliamentServlet.class);
@@ -546,6 +549,17 @@ public class ParliamentServlet extends HttpServlet {
                 JSONObject proposalJson = new JSONObject(sb.toString());
                 String title = proposalJson.getString("title").trim();
                 String party = proposalJson.optString("party", "President").trim(); // Default party is President
+                Boolean priority = proposalJson.optBoolean("priority", false); // Default party is President
+                String type = proposalJson.optString("type", "Normal").trim(); // Default party is President
+                String associatedProposal = proposalJson.optString("assProposal").trim(); // Default party is President
+
+                int nextProposalNumber = getNextProposalNumber(priority);
+
+                String proposalVisual = (priority?"P":"") +
+                        nextProposalNumber +
+                        (type.equals("additive")?" → ":type.equals("countering")?" x ":"") +
+                        associatedProposal
+                        ;
 
                 if (title.isEmpty()) {
                     response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal title cannot be empty.");
@@ -554,12 +568,15 @@ public class ParliamentServlet extends HttpServlet {
                 }
 
                 // Assign proposal number
-                int nextProposalNumber = getNextProposalNumber();
 
                 // Save the proposal to the database
                 Document proposalDoc = new Document("title", title)
                         .append("proposalNumber", nextProposalNumber)
-                        .append("party", party);
+                        .append("party", party)
+                        .append("isPriority",priority)
+                        .append("associationType",type)
+                        .append("referencedProposal",associatedProposal)
+                        .append("proposalVisual",proposalVisual);
                 proposalsCollection.insertOne(proposalDoc);
 
                 // Broadcast proposal update via WebSocket
@@ -856,16 +873,11 @@ public class ParliamentServlet extends HttpServlet {
     }
 
     // Helper method to get the next proposal number
-    private int getNextProposalNumber() {
-        Document lastProposal = proposalsCollection.find()
-                .sort(new Document("proposalNumber", -1))
-                .limit(1)
-                .first();
-
-        if (lastProposal != null) {
-            return lastProposal.getInteger("proposalNumber") + 1;
-        } else {
-            return 1; // Start from 1 if no proposals exist
-        }
+    private int getNextProposalNumber(Boolean priority) {
+        Bson filter = eq("isPriority", priority);
+        System.out.println("HELP");
+        int counter = (int)proposalsCollection.countDocuments(filter);
+        System.out.println(counter);
+        return counter+1;
     }
 }
