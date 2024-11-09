@@ -469,30 +469,36 @@ public class ParliamentServlet extends HttpServlet {
                 String userId = statusUpdate.getString("id");
                 String newStatus = statusUpdate.getString("seatStatus");
 
-                // Fetch user by ID
+                // Fetch the target user by ID
                 Document query = new Document("_id", new org.bson.types.ObjectId(userId));
                 Document userDoc = usersCollection.find(query).first();
 
                 if (userDoc != null) {
                     String targetUsername = userDoc.getString("username");
 
-                    // Prevent users from canceling their own objection unless they are the president
-                    if ("OBJECTING".equals(userDoc.getString("seatStatus")) && "NEUTRAL".equals(newStatus) && !"PRESIDENT".equals(requesterRole)) {
-                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "Only the president can cancel an objection.");
-                        logger.warn("User '{}' attempted to cancel their own objection, which is not permitted.", requesterUsername);
+                    // Check if requester is allowed to update this user's status
+                    if (!requesterUsername.equals(targetUsername) && !"PRESIDENT".equals(requesterRole)) {
+                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "You are only allowed to update your own status.");
+                        logger.warn("User '{}' attempted to update status of '{}' without permission.", requesterUsername, targetUsername);
                         return;
                     }
 
-                    // Update status normally for other conditions
+                    // Handle specific restriction: Only the president can cancel objections
+                    if ("OBJECTING".equals(userDoc.getString("seatStatus")) && "NEUTRAL".equals(newStatus) && !"PRESIDENT".equals(requesterRole)) {
+                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "Only the president can cancel an objection.");
+                        logger.warn("User '{}' attempted to cancel objection of '{}', which is not permitted.", requesterUsername, targetUsername);
+                        return;
+                    }
+
+                    // Perform the update
                     Document update = new Document("$set", new Document("seatStatus", newStatus).append("present", true));
                     usersCollection.updateOne(query, update);
 
-                    // Fetch updated user info
+                    // Broadcast the update
                     Document updatedUserDoc = usersCollection.find(query).first();
                     JSONObject userJson = new JSONObject(updatedUserDoc.toJson());
                     userJson.put("id", updatedUserDoc.getObjectId("_id").toString());
 
-                    // Broadcast seat update via WebSocket
                     JSONObject seatUpdate = new JSONObject();
                     seatUpdate.put("type", "seatUpdate");
                     seatUpdate.put("user", userJson);

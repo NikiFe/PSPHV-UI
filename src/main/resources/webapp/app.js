@@ -166,7 +166,7 @@ function refreshData() {
  * Starts polling every 2 seconds to update proposals and users.
  */
 function startPolling() {
-    setInterval(refreshData, 500); // Poll data every 2 seconds
+    setInterval(refreshData, 1000); // Poll data every 2 seconds
 }
 
 
@@ -305,7 +305,7 @@ function addOrUpdateSeat(user) {
             <h3 class="text-lg font-semibold">${user.username}</h3>
             <p class="text-sm">Role: ${user.role}</p>
             <p class="text-sm">Party: ${user.partyAffiliation || 'N/A'}</p>
-            <p class="text-sm">Fines: ${user.fines || 0}</p>
+            <p class="text-sm">Voličská síla: ${user.electoralStrength || 0}</p>
             <div class="user-actions space-x-2">
                 <button class="raise-hand bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-user-id="${user.id}" data-seat-status="${user.seatStatus}">
                     ${user.seatStatus === 'REQUESTING_TO_SPEAK' || user.seatStatus === 'OBJECTING' ? 'Cancel' : 'Raise Hand'}
@@ -543,7 +543,7 @@ loginForm.addEventListener('submit', async (e) => {
 
 function toggleBreakOverlay(isBreak) {
     console.log("toggleBreakOverlay called with isBreak:", isBreak);
-    if (isBreak && currentUser.role !== 'PRESIDENT') {
+    if (isBreak && currentUser && currentUser.role !== 'PRESIDENT') {
         breakOverlay.classList.remove('hidden');
         mainContainer.classList.add('hidden');
     } else {
@@ -737,15 +737,28 @@ endSessionButton.addEventListener('click', async () => {
     if (!confirm('Are you sure you want to end the session?')) return;
 
     try {
-        const response = await fetch('/api/end-session', {
+            const response = await fetch('/api/end-break', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (response.ok) {
+                showAlert('Break has ended.', 'success');
+                document.getElementById('end-break').classList.add('hidden'); // Hide End Break button
+                document.getElementById('break-overlay').classList.add('hidden'); // Hide the break overlay
+            } else {
+                const errorText = await response.text();
+                showAlert(`Error: ${errorText}`, 'error');
+            }
+        const response1 = await fetch('/api/end-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
         });
 
-        if (response.ok) {
+        if (response1.ok) {
             showAlert('Session has been ended.', 'success');
         } else {
-            const errorText = await response.text();
+            const errorText = await response1.text();
             showAlert(`Error: ${errorText}`, 'error');
         }
     } catch (error) {
@@ -828,6 +841,7 @@ function handleFineImposed(username, amount) {
  */
 function handleEndSession() {
     alert('The session has been ended.');
+    handleEndBreak();
     resetApp();
 }
 
@@ -836,9 +850,9 @@ async function checkBreakStatus() {
         const response = await fetch('/api/system/break-status');
         const data = await response.json();
 
-        toggleBreakOverlay(data.breakActive);  // Ensure this is called
+        toggleBreakOverlay(data.breakActive);
 
-        if (data.breakActive && currentUser.role === 'PRESIDENT') {
+        if (data.breakActive && currentUser && currentUser.role === 'PRESIDENT') {
             endBreakButton.classList.remove('hidden'); // Show for president
         } else {
             endBreakButton.classList.add('hidden');
