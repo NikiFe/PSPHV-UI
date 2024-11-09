@@ -95,18 +95,12 @@
             <button id="join-seat" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded">
                 Join Seat
             </button>
-            <button id="raise-hand-global" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded">
-                Raise Hand
-            </button>
-            <button id="object-global" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded">
-                Object
-            </button>
+            <!-- Removed Raise Hand and Object buttons from header -->
             <button id="logout" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded">
                 Logout
             </button>
         </div>
     </header>
-
 
     <main class="p-4">
         <!-- Seat Layout -->
@@ -116,13 +110,14 @@
 
         <!-- Proposals Section -->
         <div class="mb-6">
-            <h2 class="text-lg font-bold mb-2">Proposals</h2>
+            <h2 class="text-lg font-bold mb-2 text-center">Proposals</h2>
             <table class="min-w-full bg-gray-700 rounded-md">
                 <thead>
                 <tr>
-                    <th class="py-2 px-4 border-b">#</th>
-                    <th class="py-2 px-4 border-b">Title</th>
-                    <th class="py-2 px-4 border-b">Party</th>
+                    <th class="py-2 px-4 border-b text-center">#</th>
+                    <th class="py-2 px-4 border-b text-center">Title</th>
+                    <th class="py-2 px-4 border-b text-center">Party</th>
+                    <th class="py-2 px-4 border-b text-center">Actions</th>
                 </tr>
                 </thead>
                 <tbody id="proposals-table">
@@ -142,17 +137,20 @@
                            class="w-full px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
                     <input type="text" id="new-proposal-party" placeholder="Proposing Party"
                            class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
-                    <label for="new-proposal-priority">
-                        Priority:
+
+                    <!-- Styled Priority Checkbox with Label -->
+                    <label for="new-proposal-priority" class="inline-flex items-center mt-2">
+                        <input type="checkbox" id="new-proposal-priority" class="form-checkbox h-5 w-5 text-blue-600">
+                        <span class="ml-2 text-gray-100">Priority</span>
                     </label>
-                    <input type="checkbox" id="new-proposal-priority">
+
                     <select onchange="controlAssProposal()"
                             id="new-proposal-association-type" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
                         <option value="normal">Normal</option>
                         <option value="additive">Additive</option>
                         <option value="countering">Countering</option>
                     </select>
-                    <input disabled type="text" id="new-associated-proposal" placeholder="Associated proposal"
+                    <input disabled type="text" id="new-associated-proposal" placeholder="Associated Proposal"
                            class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
                     <button id="add-proposal" class="mt-2 bg-blue-600 hover:bg-blue-700 text-white py-1 px-3 rounded">
                         Add Proposal
@@ -185,7 +183,6 @@
                         End Break
                     </button>
                 </div>
-
 
                 <!-- End Session -->
                 <div>

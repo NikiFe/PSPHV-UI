@@ -112,6 +112,8 @@ public class ParliamentServlet extends HttpServlet {
                 handleGetProposalById(request, response);
             } else if (path.equals("/users")) {
                 handleGetUsers(request, response);
+            } else if (path.startsWith("/users/")) {
+                handleGetUserById(request, response);
             } else if (path.equals("/user-info")) {
                 handleUserInfo(request, response);
             } else if (path.equals("/queue")) {
@@ -408,48 +410,32 @@ public class ParliamentServlet extends HttpServlet {
                 String username = (String) session.getAttribute("username");
 
                 Document query = new Document("username", username);
+                Document update = new Document("$set", new Document("present", true).append("seatStatus", "NEUTRAL"));
+                usersCollection.updateOne(query, update);
+
+                // Broadcast seat update
                 Document userDoc = usersCollection.find(query).first();
+                JSONObject userJson = new JSONObject(userDoc.toJson());
+                userJson.put("id", userDoc.getObjectId("_id").toHexString());
+                userJson.remove("_id");
 
-                if (userDoc != null) {
-                    boolean isPresent = userDoc.getBoolean("present", false);
-                    if (isPresent) {
-                        response.sendError(HttpServletResponse.SC_BAD_REQUEST, "User is already in a seat.");
-                        logger.warn("User '{}' attempted to join a seat but is already present.", username);
-                        return;
-                    }
+                JSONObject seatUpdate = new JSONObject();
+                seatUpdate.put("type", "seatUpdate");
+                seatUpdate.put("user", userJson);
+                SeatWebSocket.broadcast(seatUpdate);
 
-                    // Update seatStatus to 'NEUTRAL' and set 'present' to true
-                    Document update = new Document("$set", new Document("seatStatus", "NEUTRAL").append("present", true));
-                    usersCollection.updateOne(query, update);
-
-                    // Fetch updated user info
-                    Document updatedUserDoc = usersCollection.find(query).first();
-                    JSONObject userJson = new JSONObject(updatedUserDoc.toJson());
-                    userJson.put("id", updatedUserDoc.getObjectId("_id").toHexString());
-                    userJson.remove("_id");
-
-                    // Broadcast seat update via WebSocket
-                    JSONObject seatUpdate = new JSONObject();
-                    seatUpdate.put("type", "seatUpdate");
-                    seatUpdate.put("user", userJson);
-                    SeatWebSocket.broadcast(seatUpdate);
-
-                    response.setStatus(HttpServletResponse.SC_OK);
-                    JSONObject resp = new JSONObject();
-                    resp.put("message", "Successfully joined a seat.");
-                    response.setContentType("application/json");
-                    response.getWriter().write(resp.toString());
-                    logger.info("User '{}' joined a seat.", username);
-                } else {
-                    response.sendError(HttpServletResponse.SC_NOT_FOUND, "User not found.");
-                    logger.warn("User '{}' not found in the database.", username);
-                }
+                response.setStatus(HttpServletResponse.SC_OK);
+                JSONObject resp = new JSONObject();
+                resp.put("message", "Joined seat successfully.");
+                response.setContentType("application/json");
+                response.getWriter().write(resp.toString());
+                logger.info("User '{}' joined a seat.", username);
             } else {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
                 logger.warn("Unauthenticated attempt to join a seat.");
             }
         } catch (Exception e) {
-            logger.error("Error during join seat: ", e);
+            logger.error("Error during joining seat: ", e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while joining the seat.");
         }
     }
@@ -478,18 +464,19 @@ public class ParliamentServlet extends HttpServlet {
 
                 if (userDoc != null) {
                     String targetUsername = userDoc.getString("username");
+                    String currentSeatStatus = userDoc.getString("seatStatus");
 
-                    // Check if requester is allowed to update this user's status
-                    if (!requesterUsername.equals(targetUsername) && !"PRESIDENT".equals(requesterRole)) {
-                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "You are only allowed to update your own status.");
-                        logger.warn("User '{}' attempted to update status of '{}' without permission.", requesterUsername, targetUsername);
+                    // Users cannot cancel their own objections unless they are the president
+                    if (requesterUsername.equals(targetUsername) && "OBJECTING".equals(currentSeatStatus) && !"PRESIDENT".equals(requesterRole)) {
+                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "You cannot cancel your own objection.");
+                        logger.warn("User '{}' attempted to cancel their own objection.", requesterUsername);
                         return;
                     }
 
-                    // Handle specific restriction: Only the president can cancel objections
-                    if ("OBJECTING".equals(userDoc.getString("seatStatus")) && "NEUTRAL".equals(newStatus) && !"PRESIDENT".equals(requesterRole)) {
-                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "Only the president can cancel an objection.");
-                        logger.warn("User '{}' attempted to cancel objection of '{}', which is not permitted.", requesterUsername, targetUsername);
+                    // Only the president can change other users' statuses
+                    if (!requesterUsername.equals(targetUsername) && !"PRESIDENT".equals(requesterRole)) {
+                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "You can only update your own status.");
+                        logger.warn("User '{}' attempted to update status of '{}' without permission.", requesterUsername, targetUsername);
                         return;
                     }
 
@@ -527,6 +514,7 @@ public class ParliamentServlet extends HttpServlet {
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while updating seat status.");
         }
     }
+
 
     // Validate seat status
     private boolean isValidSeatStatus(String status) {
@@ -786,6 +774,11 @@ public class ParliamentServlet extends HttpServlet {
                 userJson.remove("password"); // Remove sensitive information
                 userJson.put("id", doc.getObjectId("_id").toHexString());
                 userJson.remove("_id");
+
+                // Ensure seatStatus is included
+                String seatStatus = doc.getString("seatStatus");
+                userJson.put("seatStatus", seatStatus != null ? seatStatus : "NEUTRAL");
+
                 usersArray.put(userJson);
             }
 
@@ -798,34 +791,58 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
+    private void handleGetUserById(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            String userId = request.getPathInfo().split("/")[2];
+
+            Document userDoc = usersCollection.find(eq("_id", new ObjectId(userId))).first();
+
+            if (userDoc != null) {
+                JSONObject userJson = new JSONObject(userDoc.toJson());
+                userJson.remove("password"); // Remove sensitive information
+                userJson.put("id", userDoc.getObjectId("_id").toHexString());
+                userJson.remove("_id");
+
+                // Ensure seatStatus is included
+                String seatStatus = userDoc.getString("seatStatus");
+                userJson.put("seatStatus", seatStatus != null ? seatStatus : "NEUTRAL");
+
+                response.setContentType("application/json");
+                response.getWriter().write(userJson.toString());
+                logger.info("Fetched user with id '{}'.", userId);
+            } else {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, "User not found.");
+                logger.warn("User with id '{}' not found.", userId);
+            }
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid user ID format: {}", e.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid user ID format.");
+        } catch (Exception e) {
+            logger.error("Error during fetching user by id: ", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while fetching the user.");
+        }
+    }
+
+
+
     // Handle fetching logged-in user's info
     private void handleUserInfo(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        try {
-            HttpSession session = request.getSession(false);
-            if (session != null && session.getAttribute("username") != null) {
-                String username = (String) session.getAttribute("username");
-                Document query = new Document("username", username);
-                Document userDoc = usersCollection.find(query).first();
-
-                if (userDoc != null) {
-                    JSONObject userInfo = new JSONObject();
-                    userInfo.put("username", userDoc.getString("username"));
-                    userInfo.put("role", userDoc.getString("role"));
-
-                    response.setContentType("application/json");
-                    response.getWriter().write(userInfo.toString());
-                    logger.info("Fetched user info for '{}'.", username);
-                } else {
-                    response.sendError(HttpServletResponse.SC_NOT_FOUND, "User not found.");
-                    logger.warn("User '{}' not found in the database.", username);
-                }
+        HttpSession session = request.getSession(false);
+        if (session != null && session.getAttribute("username") != null) {
+            String username = (String) session.getAttribute("username");
+            Document userDoc = usersCollection.find(eq("username", username)).first();
+            if (userDoc != null) {
+                JSONObject userJson = new JSONObject(userDoc.toJson());
+                userJson.put("id", userDoc.getObjectId("_id").toHexString());
+                userJson.remove("_id");
+                userJson.remove("password"); // Remove sensitive data
+                response.setContentType("application/json");
+                response.getWriter().write(userJson.toString());
             } else {
-                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
-                logger.warn("Unauthenticated attempt to fetch user info.");
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, "User not found.");
             }
-        } catch (Exception e) {
-            logger.error("Error during fetching user info: ", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while fetching user info.");
+        } else {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
         }
     }
 

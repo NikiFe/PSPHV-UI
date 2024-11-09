@@ -101,14 +101,13 @@ function switchTab(activeTab) {
  */
 async function fetchUserInfo() {
     try {
-        const response = await fetch('/api/user-info', {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' }
-        });
+        const response = await fetch('/api/user-info');
         if (response.ok) {
-            const data = await response.json();
-            return data; // { username: '', role: '' }
+            const user = await response.json();
+            currentUser = user; // Set currentUser here
+            return user;
         } else {
+            console.error('Failed to fetch user info');
             return null;
         }
     } catch (error) {
@@ -147,10 +146,10 @@ function renderProposals(proposals) {
         const row = proposalsTable.insertRow();
         row.dataset.proposalId = proposal.id; // Use 'proposal.id'
         row.innerHTML = `
-            <td>${proposal.proposalVisual}</td>
-            <td class="proposal-title">${proposal.title}</td>
-            <td class="proposal-party">${proposal.party}</td>
-            <td class="actions-cell"></td>
+            <td class="py-2 px-4 border-b text-center">${proposal.proposalVisual}</td>
+            <td class="py-2 px-4 border-b text-center proposal-title">${proposal.title}</td>
+            <td class="py-2 px-4 border-b text-center proposal-party">${proposal.party}</td>
+            <td class="py-2 px-4 border-b text-center actions-cell"></td>
         `;
         addProposalActions(proposal, row); // Pass the row directly
     });
@@ -309,42 +308,137 @@ function addOrUpdateSeat(user) {
             <p class="text-sm">Party: ${user.partyAffiliation || 'N/A'}</p>
             <p class="text-sm">Voličská síla: ${user.electoralStrength || 0}</p>
             <div class="user-actions space-x-2">
-                <button class="raise-hand bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-user-id="${user.id}" data-seat-status="${user.seatStatus}">
-                    ${user.seatStatus === 'REQUESTING_TO_SPEAK' || user.seatStatus === 'OBJECTING' ? 'Cancel' : 'Raise Hand'}
+                <button class="raise-hand-btn bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs">
+                    Raise Hand
                 </button>
-                <button class="object bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-user-id="${user.id}">
+                <button class="object-btn bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs">
                     Object
                 </button>
+                <!-- Cancel button will be conditionally added -->
             </div>
         `;
 
         seatLayout.appendChild(seat);
-
-        // Attach event listeners to the buttons within the new seat
-        const raiseHandButton = seat.querySelector('.raise-hand');
-        const objectButton = seat.querySelector('.object');
-
-        raiseHandButton.addEventListener('click', () => {
-            const currentStatus = raiseHandButton.dataset.seatStatus;
-            if (currentStatus === 'REQUESTING_TO_SPEAK' || currentStatus === 'OBJECTING') {
-                updateSeatStatus(user.id, 'NEUTRAL');
-            } else {
-                updateSeatStatus(user.id, 'REQUESTING_TO_SPEAK');
-            }
-        });
-
-        objectButton.addEventListener('click', () => {
-            updateSeatStatus(user.id, 'OBJECTING');
-        });
-
-        // Add president controls if the current user is the president and the user status requires it
-        if (currentUser && currentUser.role === 'PRESIDENT' && (user.seatStatus === 'REQUESTING_TO_SPEAK' || user.seatStatus === 'OBJECTING')) {
-            addPresidentControls(seat, user);
-        }
     }
+
+    // Update seat content
+    updateSeatContent(seat, user);
 
     // Always apply background color based on the seat status
     updateSeatBackground(seat, user.seatStatus);
+
+    // Remove the call to addPresidentControls
+    // Previously, we had:
+    // if (currentUser && currentUser.role === 'PRESIDENT') {
+    //     addPresidentControls(seat, user);
+    // }
+    // Since we're using a general "Cancel" button, this is no longer needed
+}
+
+
+
+
+function attachSeatEventListeners(seat, user) {
+    const raiseHandButton = seat.querySelector('.raise-hand');
+    const objectButton = seat.querySelector('.object');
+
+    raiseHandButton.addEventListener('click', () => {
+        if (raiseHandButton.textContent === 'Cancel') {
+            updateSeatStatus(user.id, 'NEUTRAL');
+        } else {
+            updateSeatStatus(user.id, 'REQUESTING_TO_SPEAK');
+        }
+    });
+
+    objectButton.addEventListener('click', () => {
+        updateSeatStatus(user.id, 'OBJECTING');
+    });
+}
+
+function updateSeatContent(seat, user) {
+    // Logging IDs
+    console.log(`updateSeatContent - user.id: ${user.id}, currentUser.id: ${currentUser.id}`);
+
+    const userId = String(user.id);
+    const currentUserId = String(currentUser.id);
+
+    // Update user details
+    seat.querySelector('h3').textContent = user.username;
+    seat.querySelector('p:nth-of-type(1)').textContent = `Role: ${user.role}`;
+    seat.querySelector('p:nth-of-type(2)').textContent = `Party: ${user.partyAffiliation || 'N/A'}`;
+    seat.querySelector('p:nth-of-type(3)').textContent = `Voličská síla: ${user.electoralStrength || 0}`;
+
+    const userActionsDiv = seat.querySelector('.user-actions');
+
+    // Remove existing buttons to prevent duplicates
+    userActionsDiv.innerHTML = '';
+
+    // Buttons for the current user (including the president)
+    if (userId === currentUserId) {
+        // Raise Hand Button
+        const raiseHandButton = document.createElement('button');
+        raiseHandButton.classList.add('raise-hand-btn', 'bg-blue-500', 'hover:bg-blue-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+        raiseHandButton.textContent = 'Raise Hand';
+        raiseHandButton.addEventListener('click', () => {
+            updateSeatStatus(user.id, 'REQUESTING_TO_SPEAK');
+        });
+        userActionsDiv.appendChild(raiseHandButton);
+
+        // Object Button
+        const objectButton = document.createElement('button');
+        objectButton.classList.add('object-btn', 'bg-red-500', 'hover:bg-red-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+        objectButton.textContent = 'Object';
+        objectButton.addEventListener('click', () => {
+            updateSeatStatus(user.id, 'OBJECTING');
+        });
+        userActionsDiv.appendChild(objectButton);
+
+        // Add Cancel Button if necessary
+        if (user.seatStatus !== 'NEUTRAL') {
+            const cancelButton = document.createElement('button');
+            cancelButton.classList.add('cancel-btn', 'bg-gray-500', 'hover:bg-gray-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+            cancelButton.textContent = 'Cancel';
+            cancelButton.addEventListener('click', () => {
+                updateSeatStatus(user.id, 'NEUTRAL');
+            });
+            userActionsDiv.appendChild(cancelButton);
+        }
+
+        // Add "Call to Speak" Button if applicable (for the president)
+        if (currentUser.role === 'PRESIDENT' && user.seatStatus !== 'SPEAKING') {
+            const callToSpeakButton = document.createElement('button');
+            callToSpeakButton.classList.add('call-to-speak-btn', 'bg-green-500', 'hover:bg-green-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+            callToSpeakButton.textContent = 'Call to Speak';
+            callToSpeakButton.addEventListener('click', () => {
+                updateSeatStatus(user.id, 'SPEAKING');
+            });
+            userActionsDiv.appendChild(callToSpeakButton);
+        }
+    }
+    // Buttons for other users (visible to the president)
+    else if (currentUser.role === 'PRESIDENT') {
+        // Add "Call to Speak" button if user's status is not 'NEUTRAL' or 'SPEAKING'
+        if (user.seatStatus !== 'NEUTRAL' && user.seatStatus !== 'SPEAKING') {
+            const callToSpeakButton = document.createElement('button');
+            callToSpeakButton.classList.add('call-to-speak-btn', 'bg-green-500', 'hover:bg-green-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+            callToSpeakButton.textContent = 'Call to Speak';
+            callToSpeakButton.addEventListener('click', () => {
+                updateSeatStatus(user.id, 'SPEAKING');
+            });
+            userActionsDiv.appendChild(callToSpeakButton);
+        }
+
+        // Add Cancel Button if necessary
+        if (user.seatStatus !== 'NEUTRAL') {
+            const cancelButton = document.createElement('button');
+            cancelButton.classList.add('cancel-btn', 'bg-gray-500', 'hover:bg-gray-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+            cancelButton.textContent = 'Cancel';
+            cancelButton.addEventListener('click', () => {
+                updateSeatStatus(user.id, 'NEUTRAL');
+            });
+            userActionsDiv.appendChild(cancelButton);
+        }
+    }
 }
 
 /**
@@ -390,19 +484,7 @@ function removeSeat(userId) {
  */
 async function updateSeatStatus(userId, status) {
     try {
-        // Determine if 'present' should remain true
-        let present = true; // Assume the user remains present
-
-        // If status indicates leaving, set present to false
-        const isLeaving = status === 'LEAVING';
-        if (isLeaving) {
-            present = false;
-        }
-
         const payload = { id: userId, seatStatus: status };
-        if (isLeaving) {
-            payload.present = present;
-        }
 
         const response = await fetch('/api/users/update-status', {
             method: 'POST',
@@ -411,6 +493,13 @@ async function updateSeatStatus(userId, status) {
         });
 
         if (response.ok) {
+            // Fetch the updated user data
+            const updatedUser = await fetchUserById(userId);
+            if (updatedUser) {
+                addOrUpdateSeat(updatedUser);
+            }
+
+            // Show appropriate message
             let message = '';
             switch (status) {
                 case 'REQUESTING_TO_SPEAK':
@@ -419,22 +508,17 @@ async function updateSeatStatus(userId, status) {
                 case 'OBJECTING':
                     message = 'You are objecting.';
                     break;
-                case 'SPEAKING':
-                    message = 'You are now speaking.';
-                    break;
                 case 'NEUTRAL':
-                    message = 'Your hand has been lowered.';
-                    break;
-                case 'LEAVING':
-                    message = 'You have left the meeting.';
+                    message = 'Status has been cancelled.';
                     break;
                 default:
-                    message = 'Seat status updated successfully!';
+                    message = 'Seat status updated.';
             }
             showAlert(message, 'success');
         } else if (response.status === 403) {
-            // Display error if the user is not authorized to cancel an objection
-            showAlert('Only the president can cancel an objection.', 'error');
+            // Forbidden action
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, 'error');
         } else {
             const errorText = await response.text();
             showAlert(`Error: ${errorText}`, 'error');
@@ -444,6 +528,27 @@ async function updateSeatStatus(userId, status) {
         showAlert('An error occurred while updating seat status.', 'error');
     }
 }
+
+
+async function fetchUserById(userId) {
+    try {
+        const response = await fetch(`/api/users/${userId}`, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        if (response.ok) {
+            const user = await response.json();
+            return user;
+        } else {
+            console.warn(`Failed to fetch user with ID ${userId}.`);
+            return null;
+        }
+    } catch (error) {
+        console.error(`Error fetching user with ID ${userId}:`, error);
+        return null;
+    }
+}
+
 
 // ======================
 // Event Listeners
