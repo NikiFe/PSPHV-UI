@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <title>PSPHV</title>
-    <!-- Tailwind CSS CDN with Dark Mode Support -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind CSS CDN with Forms Plugin -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
     <script>
         // Enable dark mode by default
         tailwind.config = {
@@ -12,9 +12,12 @@
             theme: {
                 extend: {},
             },
-            plugins: [],
         }
     </script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600&family=Open+Sans:wght@400;500&display=swap" rel="stylesheet">
     <style>
         /* Custom scrollbar for better aesthetics */
         ::-webkit-scrollbar {
@@ -28,6 +31,14 @@
             border-radius: 4px;
             border: 2px solid #2d3748;
         }
+
+        body {
+            font-family: 'Open Sans', sans-serif;
+        }
+
+        .main-title {
+            font-family: 'Montserrat', sans-serif;
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 transition-colors duration-500">
@@ -36,10 +47,10 @@
     <div class="bg-gray-800 p-8 rounded shadow-md w-full max-w-md">
         <!-- Tabs for Login and Register -->
         <div class="flex mb-6">
-            <button id="login-tab" class="flex-1 py-2 px-4 text-center text-blue-400 border-b-2 border-blue-400 font-semibold">
+            <button id="login-tab" class="flex-1 py-2 px-4 text-center text-blue-400 border-b-2 border-blue-400 font-semibold main-title">
                 Login
             </button>
-            <button id="register-tab" class="flex-1 py-2 px-4 text-center text-gray-400 border-b-2 border-transparent hover:border-gray-600 font-semibold">
+            <button id="register-tab" class="flex-1 py-2 px-4 text-center text-gray-400 border-b-2 border-transparent hover:border-gray-600 font-semibold main-title">
                 Register
             </button>
         </div>
@@ -57,7 +68,7 @@
                        class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring focus:border-blue-500">
             </div>
             <button type="submit"
-                    class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded">
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded font-semibold">
                 Login
             </button>
         </form>
@@ -75,7 +86,7 @@
                        class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring focus:border-green-500">
             </div>
             <button type="submit"
-                    class="w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded">
+                    class="w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded font-semibold">
                 Register
             </button>
         </form>
@@ -90,7 +101,7 @@
 <!-- Main Application Interface (Hidden by Default) -->
 <div id="main-container" class="hidden">
     <header class="bg-gray-800 p-4 text-gray-100 flex justify-between items-center">
-        <h1 class="text-xl font-semibold">PSPHVUI</h1>
+        <h1 class="text-2xl font-semibold main-title">PSPHVUI</h1>
         <div class="flex items-center space-x-4">
             <button id="join-seat" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded">
                 Join Seat
@@ -110,29 +121,34 @@
 
         <!-- Proposals Section -->
         <div class="mb-6">
-            <h2 class="text-lg font-bold mb-2 text-center">Proposals</h2>
-            <table class="min-w-full bg-gray-700 rounded-md">
-                <thead>
-                <tr>
-                    <th class="py-2 px-4 border-b text-center">#</th>
-                    <th class="py-2 px-4 border-b text-center">Title</th>
-                    <th class="py-2 px-4 border-b text-center">Party</th>
-                    <th class="py-2 px-4 border-b text-center">Actions</th>
-                </tr>
-                </thead>
-                <tbody id="proposals-table">
-                <!-- Proposals will be dynamically injected here -->
-                </tbody>
-            </table>
+            <h2 class="text-2xl font-bold mb-4 text-center main-title">Proposals</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full bg-gray-700 rounded-md">
+                    <thead>
+                    <tr>
+                        <th class="py-2 px-4 border-b text-center w-1/12">#</th>
+                        <th class="py-2 px-4 border-b text-center w-4/12">Title</th>
+                        <th class="py-2 px-4 border-b text-center w-2/12">Party</th>
+                        <th class="py-2 px-4 border-b text-center w-3/12">Your Vote</th>
+                        <th class="py-2 px-4 border-b text-center w-2/12">Status</th>
+                        <!-- Actions column for President -->
+                        <th class="py-2 px-4 border-b text-center w-1/12">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody id="proposals-table">
+                    <!-- Proposals will be dynamically injected here -->
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <!-- Conditional Presidential Actions -->
         <div id="president-actions" class="hidden mb-6">
-            <h2 class="text-lg font-bold mb-2">Presidential Actions</h2>
+            <h2 class="text-xl font-bold mb-2 main-title">Presidential Actions</h2>
             <div class="space-y-4">
                 <!-- Add Proposal -->
                 <div>
-                    <h3 class="font-semibold mb-1">Add Proposal</h3>
+                    <h3 class="font-semibold mb-1 main-title">Add Proposal</h3>
                     <input type="text" id="new-proposal-title" placeholder="Proposal Title"
                            class="w-full px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
                     <input type="text" id="new-proposal-party" placeholder="Proposing Party"
@@ -152,41 +168,48 @@
                     </select>
                     <input disabled type="text" id="new-associated-proposal" placeholder="Associated Proposal"
                            class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
-                    <button id="add-proposal" class="mt-2 bg-blue-600 hover:bg-blue-700 text-white py-1 px-3 rounded">
+                    <button id="add-proposal" class="mt-2 bg-blue-600 hover:bg-blue-700 text-white py-1 px-3 rounded font-semibold">
                         Add Proposal
                     </button>
                 </div>
 
                 <!-- Impose Fine -->
                 <div>
-                    <h3 class="font-semibold mb-1">Impose Fine</h3>
+                    <h3 class="font-semibold mb-1 main-title">Impose Fine</h3>
                     <input type="text" id="fine-username" placeholder="Username"
                            class="w-full px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-red-500">
                     <input type="number" id="fine-amount" placeholder="Amount"
                            class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-red-500">
                     <input type="text" id="fine-reason" placeholder="Reason for Fine"
                            class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-red-500">
-                    <button id="impose-fine" class="mt-2 bg-red-600 hover:bg-red-700 text-white py-1 px-3 rounded">
+                    <button id="impose-fine" class="mt-2 bg-red-600 hover:bg-red-700 text-white py-1 px-3 rounded font-semibold">
                         Impose Fine
                     </button>
                 </div>
 
                 <!-- Call Break -->
                 <div>
-                    <button id="call-break" class="bg-yellow-500 hover:bg-yellow-600 text-gray-900 py-2 px-4 rounded">
+                    <button id="call-break" class="bg-yellow-500 hover:bg-yellow-600 text-gray-900 py-2 px-4 rounded font-semibold">
                         Call Break
                     </button>
                 </div>
                 <!-- End Break -->
                 <div>
-                    <button id="end-break" class="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded hidden">
+                    <button id="end-break" class="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded hidden font-semibold">
                         End Break
+                    </button>
+                </div>
+
+                <!-- End Voting -->
+                <div>
+                    <button id="end-voting" class="bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded font-semibold">
+                        End Voting
                     </button>
                 </div>
 
                 <!-- End Session -->
                 <div>
-                    <button id="end-session" class="bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded">
+                    <button id="end-session" class="bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded font-semibold">
                         End Session
                     </button>
                 </div>

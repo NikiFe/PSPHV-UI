@@ -1,8 +1,10 @@
 package com.example;
 
+import java.util.stream.Collectors;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.Updates;
 import org.bson.Document;
 import org.bson.conversions.Bson;
@@ -11,13 +13,15 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import javax.servlet.ServletException;
 import javax.servlet.http.*;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.*;
 
 import static com.mongodb.client.model.Filters.eq;
 
@@ -26,24 +30,51 @@ public class ParliamentServlet extends HttpServlet {
 
     private final MongoCollection<Document> usersCollection;
     private final MongoCollection<Document> proposalsCollection;
+    private final MongoCollection<Document> votesCollection;
+    private final MongoCollection<Document> votingLogsCollection;
     private final MongoCollection<Document> fineReasonsCollection;
     private final MongoCollection<Document> systemParametersCollection;
+
+    private String discordWebhookUrl; // Add this variable
 
     public ParliamentServlet() {
         MongoDatabase database = MongoDBConnection.getDatabase();
         this.usersCollection = database.getCollection("users");
         this.proposalsCollection = database.getCollection("proposals");
+        this.votesCollection = database.getCollection("votes");
+        this.votingLogsCollection = database.getCollection("votingLogs");
         this.fineReasonsCollection = database.getCollection("fineReasons");
         this.systemParametersCollection = database.getCollection("systemParameters");
 
         // Ensure break status is initialized if missing
         initializeBreakStatus();
+
+        // Initialize meeting number if missing
+        initializeMeetingNumber();
+
+        // Initialize Discord webhook URL
+        initializeDiscordWebhookUrl();
+    }
+
+    private void initializeDiscordWebhookUrl() {
+        // Load Discord webhook URL from environment variable or configuration file
+        discordWebhookUrl = System.getenv("DISCORD_WEBHOOK_URL");
+        if (discordWebhookUrl == null || discordWebhookUrl.isEmpty()) {
+            logger.warn("Discord webhook URL not configured. Messages will not be sent to Discord.");
+        }
     }
 
     private void initializeBreakStatus() {
         Document breakStatus = systemParametersCollection.find(Filters.eq("parameter", "breakStatus")).first();
         if (breakStatus == null) {
             systemParametersCollection.insertOne(new Document("parameter", "breakStatus").append("value", false));
+        }
+    }
+
+    private void initializeMeetingNumber() {
+        Document meetingDoc = systemParametersCollection.find(Filters.eq("parameter", "meetingNumber")).first();
+        if (meetingDoc == null) {
+            systemParametersCollection.insertOne(new Document("parameter", "meetingNumber").append("value", 1));
         }
     }
 
@@ -57,6 +88,18 @@ public class ParliamentServlet extends HttpServlet {
     private boolean isBreakActive() {
         Document breakStatus = systemParametersCollection.find(Filters.eq("parameter", "breakStatus")).first();
         return breakStatus != null && breakStatus.getBoolean("value", false);
+    }
+
+    private int getCurrentMeetingNumber() {
+        Document meetingDoc = systemParametersCollection.find(Filters.eq("parameter", "meetingNumber")).first();
+        return meetingDoc != null ? meetingDoc.getInteger("value", 1) : 1;
+    }
+
+    private void incrementMeetingNumber() {
+        systemParametersCollection.updateOne(
+                Filters.eq("parameter", "meetingNumber"),
+                new Document("$inc", new Document("value", 1))
+        );
     }
 
     @Override
@@ -79,6 +122,12 @@ public class ParliamentServlet extends HttpServlet {
             case "/proposals":
                 handleNewProposal(request, response);
                 break;
+            case "/proposals/vote":
+                handleSubmitVote(request, response);
+                break;
+            case "/proposals/end-voting":
+                handleEndVoting(request, response);
+                break;
             case "/impose-fine":
                 handleImposeFine(request, response);
                 break;
@@ -93,6 +142,12 @@ public class ParliamentServlet extends HttpServlet {
                 break;
             case "/register":
                 handleRegister(request, response);
+                break;
+            case "/elections/results":
+                handleElectionResults(request, response);
+                break;
+            case "/users/update": // New case for updating users
+                handleUpdateUsers(request, response);
                 break;
             default:
                 response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
@@ -209,7 +264,7 @@ public class ParliamentServlet extends HttpServlet {
                     .append("seatStatus", "NEUTRAL")
                     .append("fines", 0)
                     .append("partyAffiliation", "") // Initialize as empty; can be updated later
-                    .append("electoralStrength", 0); // Initialize as 0; can be updated later
+                    .append("electoralStrength", 1); // Default electoral strength is 1
 
             // Insert the new user into the database
             usersCollection.insertOne(newUser);
@@ -357,6 +412,8 @@ public class ParliamentServlet extends HttpServlet {
                     HttpSession session = request.getSession(true);
                     session.setAttribute("username", username);
                     session.setAttribute("role", userDoc.getString("role"));
+                    session.setAttribute("userId", userDoc.getObjectId("_id").toHexString());
+                    session.setAttribute("electoralStrength", userDoc.getInteger("electoralStrength", 1));
 
                     response.setStatus(HttpServletResponse.SC_OK);
                     JSONObject resp = new JSONObject();
@@ -515,7 +572,6 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
-
     // Validate seat status
     private boolean isValidSeatStatus(String status) {
         return "REQUESTING_TO_SPEAK".equals(status) ||
@@ -555,6 +611,8 @@ public class ParliamentServlet extends HttpServlet {
                     return;
                 }
 
+                int meetingNumber = getCurrentMeetingNumber();
+
                 // Save the proposal to the database
                 Document proposalDoc = new Document("title", title)
                         .append("proposalNumber", nextProposalNumber)
@@ -562,7 +620,12 @@ public class ParliamentServlet extends HttpServlet {
                         .append("isPriority", priority)
                         .append("associationType", type)
                         .append("referencedProposal", associatedProposal)
-                        .append("proposalVisual", proposalVisual);
+                        .append("proposalVisual", proposalVisual)
+                        .append("meetingNumber", meetingNumber)
+                        .append("passed", false)
+                        .append("totalFor", 0)
+                        .append("totalAgainst", 0)
+                        .append("votingEnded", false);
                 proposalsCollection.insertOne(proposalDoc);
 
                 // Fetch the inserted proposal to get the '_id'
@@ -601,6 +664,540 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
+    // Handle submitting a vote
+    private void handleSubmitVote(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            HttpSession session = request.getSession(false);
+            if (session != null && session.getAttribute("username") != null) {
+                String username = (String) session.getAttribute("username");
+                String userId = (String) session.getAttribute("userId");
+                int electoralStrength = (int) session.getAttribute("electoralStrength");
+
+                // Parse JSON from request body
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = request.getReader().readLine()) != null) {
+                    sb.append(line);
+                }
+                JSONObject voteJson = new JSONObject(sb.toString());
+                String proposalId = voteJson.getString("proposalId");
+                String voteChoice = voteJson.getString("voteChoice"); // "For", "Against", or "Abstain"
+
+                // Validate voteChoice
+                if (!Arrays.asList("For", "Against", "Abstain").contains(voteChoice)) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid vote choice.");
+                    logger.warn("User '{}' submitted an invalid vote choice '{}'.", username, voteChoice);
+                    return;
+                }
+
+                // Fetch the proposal
+                Document proposal = proposalsCollection.find(eq("_id", new ObjectId(proposalId))).first();
+                if (proposal == null || proposal.getBoolean("votingEnded", false)) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal or voting has ended.");
+                    return;
+                }
+
+                // Prepare the vote record with timestamp
+                Document voteRecord = new Document("proposalId", new ObjectId(proposalId))
+                        .append("userId", new ObjectId(userId))
+                        .append("username", username)
+                        .append("voteChoice", voteChoice)
+                        .append("electoralStrength", electoralStrength)
+                        .append("timestamp", new Date()); // Add timestamp
+
+                // Update or insert the vote
+                votesCollection.updateOne(
+                        Filters.and(eq("proposalId", new ObjectId(proposalId)), eq("userId", new ObjectId(userId))),
+                        new Document("$set", voteRecord),
+                        new UpdateOptions().upsert(true)
+                );
+
+                response.setStatus(HttpServletResponse.SC_OK);
+                JSONObject resp = new JSONObject();
+                resp.put("message", "Vote submitted successfully.");
+                response.setContentType("application/json");
+                response.getWriter().write(resp.toString());
+                logger.info("User '{}' submitted a vote for proposal '{}'. Vote Choice: '{}'", username, proposalId, voteChoice);
+            } else {
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
+                logger.warn("Unauthenticated attempt to submit a vote.");
+            }
+        } catch (Exception e) {
+            logger.error("Error during submitting vote: ", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while submitting the vote.");
+        }
+    }
+
+    private void handleEndVoting(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            HttpSession session = request.getSession(false);
+            if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
+                // Fetch all proposals where voting hasn't ended
+                List<Document> proposals = proposalsCollection.find(eq("votingEnded", false)).into(new ArrayList<>());
+
+                // Fetch all users
+                List<Document> allUsers = usersCollection.find().into(new ArrayList<>());
+
+                // Separate NEZ users from others
+                List<Document> nezUsers = allUsers.stream()
+                        .filter(user -> "NEZ".equalsIgnoreCase(user.getString("partyAffiliation")))
+                        .collect(Collectors.toList());
+
+                List<Document> otherUsers = allUsers.stream()
+                        .filter(user -> !"NEZ".equalsIgnoreCase(user.getString("partyAffiliation")))
+                        .collect(Collectors.toList());
+
+                // Map to hold adjusted electoral strengths per user
+                Map<String, Integer> adjustedElectoralStrengths = new HashMap<>();
+
+                // Handle NEZ users: include their electoralStrength if present
+                for (Document nezUser : nezUsers) {
+                    boolean isPresent = nezUser.getBoolean("present", false);
+                    if (isPresent) {
+                        String userId = nezUser.getObjectId("_id").toHexString();
+                        int electoralStrength = nezUser.getInteger("electoralStrength", 0);
+                        adjustedElectoralStrengths.put(userId, electoralStrength);
+                        logger.debug("NEZ User: '{}', Electoral Strength: {}", nezUser.getString("username"), electoralStrength);
+                    } else {
+                        logger.debug("NEZ User: '{}', is absent. Electoral Strength not counted.", nezUser.getString("username"));
+                    }
+                }
+
+                // Group other users by their partyAffiliation
+                Map<String, List<Document>> usersByParty = otherUsers.stream()
+                        .collect(Collectors.groupingBy(user -> {
+                            String partyAffiliation = user.getString("partyAffiliation");
+                            return (partyAffiliation != null && !partyAffiliation.trim().isEmpty()) ? partyAffiliation : "Independent";
+                        }));
+
+                // Iterate over each party to perform redistribution within the party
+                for (Map.Entry<String, List<Document>> entry : usersByParty.entrySet()) {
+                    String party = entry.getKey();
+                    List<Document> partyUsers = entry.getValue();
+
+                    // Separate present and absent users within the party
+                    List<Document> presentUsers = new ArrayList<>();
+                    List<Document> absentUsers = new ArrayList<>();
+
+                    int sumPresent = 0;
+                    int sumAbsent = 0;
+
+                    for (Document user : partyUsers) {
+                        int electoralStrength = user.getInteger("electoralStrength", 0);
+                        if (user.getBoolean("present", false)) {
+                            presentUsers.add(user);
+                            sumPresent += electoralStrength;
+                        } else {
+                            absentUsers.add(user);
+                            sumAbsent += electoralStrength;
+                        }
+                    }
+
+                    // Log the current party's present and absent sums
+                    logger.debug("Processing Party: '{}', Sum Present: {}, Sum Absent: {}", party, sumPresent, sumAbsent);
+
+                    // Skip redistribution if there are no present users in the party
+                    if (sumPresent == 0) {
+                        if (sumAbsent > 0) {
+                            // Log warning: No present users to redistribute absent weights in this party
+                            logger.warn("No present users in party '{}' to redistribute {} absent electoral strength.", party, sumAbsent);
+                        }
+                        continue;
+                    }
+
+                    // Redistribute absent weights to present users within the party
+                    for (Document user : presentUsers) {
+                        String userId = user.getObjectId("_id").toHexString();
+                        int originalWeight = user.getInteger("electoralStrength", 0);
+                        double adjustedWeightDouble = originalWeight + ((double) originalWeight * sumAbsent / sumPresent);
+
+                        // Round to the nearest integer
+                        int adjustedWeight = (int) Math.round(adjustedWeightDouble);
+                        adjustedElectoralStrengths.put(userId, adjustedWeight);
+
+                        // Log the adjusted weight for debugging
+                        logger.debug("Party: '{}', User ID: '{}', Original Weight: {}, Adjusted Weight: {}",
+                                party, userId, originalWeight, adjustedWeight);
+                    }
+                }
+
+                // Log the adjusted electoral strengths map for verification
+                logger.debug("Adjusted Electoral Strengths: {}", adjustedElectoralStrengths);
+
+                // Process each proposal
+                for (Document proposal : proposals) {
+                    ObjectId proposalId = proposal.getObjectId("_id");
+
+                    // Fetch all votes for this proposal
+                    List<Document> votes = votesCollection.find(eq("proposalId", proposalId)).into(new ArrayList<>());
+
+                    int totalFor = 0;
+                    int totalAgainst = 0;
+                    int supportersCount = 0;
+
+                    // Prepare a detailed list of votes for logging
+                    JSONArray detailedVotes = new JSONArray();
+
+                    for (Document vote : votes) {
+                        String voteChoice = vote.getString("voteChoice");
+                        String voterId = vote.getObjectId("userId").toHexString();
+                        String username = vote.getString("username");
+                        int voterAdjustedStrength = adjustedElectoralStrengths.getOrDefault(voterId, 0);
+                        Date timestamp = vote.getDate("timestamp");
+
+                        // Log each vote's details
+                        logger.debug("Processing Vote - Voter ID: '{}', Username: '{}', Choice: '{}', Adjusted Strength: {}, Timestamp: {}",
+                                voterId, username, voteChoice, voterAdjustedStrength, timestamp);
+
+                        // Build detailed vote JSON object
+                        JSONObject detailedVote = new JSONObject();
+                        detailedVote.put("userId", voterId);
+                        detailedVote.put("username", username);
+                        detailedVote.put("voteChoice", voteChoice);
+                        detailedVote.put("electoralStrength", voterAdjustedStrength);
+                        detailedVote.put("timestamp", timestamp.toInstant().toString()); // ISO 8601 format
+
+                        detailedVotes.put(detailedVote);
+
+                        if ("For".equalsIgnoreCase(voteChoice)) {
+                            totalFor += voterAdjustedStrength;
+                            supportersCount++;
+                        } else if ("Against".equalsIgnoreCase(voteChoice)) {
+                            totalAgainst += voterAdjustedStrength;
+                        }
+                        // Abstain votes do not affect totals
+                    }
+
+                    // Log the vote totals before determining the outcome
+                    logger.debug("Proposal ID: '{}', Total For: {}, Total Against: {}, Supporters Count: {}",
+                            proposalId, totalFor, totalAgainst, supportersCount);
+
+                    // Determine if the proposal passed
+                    boolean passed = false;
+                    if (supportersCount >= 2 && totalFor > totalAgainst) {
+                        passed = true;
+                    }
+
+                    // Update the proposal with voting results
+                    proposalsCollection.updateOne(
+                            eq("_id", proposalId),
+                            new Document("$set", new Document("passed", passed)
+                                    .append("totalFor", totalFor)
+                                    .append("totalAgainst", totalAgainst)
+                                    .append("votingEnded", true))
+                    );
+
+                    // Log the voting results in votingLogsCollection with detailed votes
+                    Document votingLog = new Document("proposalId", proposalId)
+                            .append("proposalTitle", proposal.getString("title"))
+                            .append("meetingNumber", proposal.getInteger("meetingNumber", 1))
+                            .append("votes", detailedVotes.toList()) // Insert detailed votes
+                            .append("timestamp", new Date());
+
+                    votingLogsCollection.insertOne(votingLog);
+
+                    // Log the outcome of the proposal
+                    logger.info("Proposal '{}': For = {}, Against = {}, Passed = {}",
+                            proposal.getString("title"), totalFor, totalAgainst, passed);
+                }
+
+                // Send the voting results to Discord
+                sendVotingResultsToDiscord();
+
+                // Increment meeting number
+                incrementMeetingNumber();
+
+                // Prepare and send the response
+                response.setStatus(HttpServletResponse.SC_OK);
+                JSONObject resp = new JSONObject();
+                resp.put("message", "Voting ended and votes counted successfully.");
+                response.setContentType("application/json");
+                response.getWriter().write(resp.toString());
+                logger.info("President ended voting and counted votes.");
+            } else {
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can end voting.");
+                logger.warn("Unauthorized attempt to end voting.");
+            }
+        } catch (Exception e) {
+            logger.error("Error during ending voting: ", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while ending voting.");
+        }
+    }
+
+
+    // Send voting results to Discord
+    private void sendVotingResultsToDiscord() {
+        try {
+            if (discordWebhookUrl == null || discordWebhookUrl.isEmpty()) {
+                logger.warn("Discord webhook URL is not configured. Skipping sending results to Discord.");
+                return;
+            }
+
+            // Fetch current meeting number
+            int meetingNumber = getCurrentMeetingNumber();
+
+            // Fetch all proposals for the current meeting
+            List<Document> proposals = proposalsCollection.find(eq("meetingNumber", meetingNumber)).into(new ArrayList<>());
+
+            // Fetch present users
+            List<Document> presentUsers = usersCollection.find(eq("present", true)).into(new ArrayList<>());
+
+            // Fetch the chairman (předseda) using role "PRESIDENT"
+            Document chairman = usersCollection.find(eq("role", "PRESIDENT")).first();
+            String chairmanName = (chairman != null) ? chairman.getString("username") : "N/A";
+
+            // Build the message
+            StringBuilder messageBuilder = new StringBuilder();
+
+            // "Jednání: **71**"
+            messageBuilder.append("Jednání: **").append(meetingNumber).append("**\n");
+
+            // "Účast: **4**"
+            messageBuilder.append("Účast: **").append(presentUsers.size()).append("**\n");
+
+            // "Předseda: **Vitjaaa**"
+            messageBuilder.append("Předseda: **").append(chairmanName).append("**\n\n");
+
+            // Next meeting date placeholder
+            String nextMeetingDate = "TBD"; // Replace with actual date if available
+            messageBuilder.append("Další jednání: ").append(nextMeetingDate).append("\n\n");
+
+            // "Docházka:"
+            messageBuilder.append("Docházka:\n");
+
+            // Build attendance list with bolded electoral strength and usernames
+            for (Document user : presentUsers) {
+                String username = user.getString("username");
+                String party = user.getString("partyAffiliation");
+                int electoralStrength = user.getInteger("electoralStrength", 0);
+
+                messageBuilder.append("**").append(electoralStrength).append("** - ")
+                        .append((party != null && !party.isEmpty()) ? party : "/").append(" - ")
+                        .append("**").append(username).append("**\n");
+            }
+            messageBuilder.append("\n");
+
+            // Build proposals results
+            for (Document proposal : proposals) {
+                String resultEmoji = proposal.getBoolean("passed", false) ? "✅" : "❌";
+                String proposalVisual = proposal.getString("proposalVisual");
+                String party = proposal.getString("party");
+                String title = proposal.getString("title");
+
+                // Bold proposal number and party, including colon
+                String formattedProposalVisual = String.format("**%s %s:**", proposalVisual, (party != null && !party.isEmpty()) ? party : "/");
+
+                messageBuilder.append(String.format("%s %s %s\n", resultEmoji, formattedProposalVisual, title));
+            }
+
+            // Fetch fines for the current meeting
+            List<Document> fines = fineReasonsCollection.find(eq("meetingNumber", meetingNumber)).into(new ArrayList<>());
+
+            if (!fines.isEmpty()) {
+                messageBuilder.append("\nKázeňská opatření:\n");
+
+                class FineBreakdown {
+                    int amount;
+                    int count;
+                    String reason;
+
+                    FineBreakdown(int amount, String reason) {
+                        this.amount = amount;
+                        this.reason = reason;
+                        this.count = 1;
+                    }
+                }
+
+                // Aggregate fines per user
+                Map<String, Integer> userTotalAmounts = new HashMap<>();
+                Map<String, List<FineBreakdown>> userFineBreakdowns = new HashMap<>();
+
+                for (Document fine : fines) {
+                    String username = fine.getString("username");
+                    int amount = fine.getInteger("amount", 0);
+                    String reason = fine.getString("reason");
+
+                    // Update total amount
+                    userTotalAmounts.put(username, userTotalAmounts.getOrDefault(username, 0) + amount);
+
+                    // Update breakdowns
+                    List<FineBreakdown> breakdownList = userFineBreakdowns.get(username);
+                    if (breakdownList == null) {
+                        breakdownList = new ArrayList<>();
+                        userFineBreakdowns.put(username, breakdownList);
+                    }
+
+                    // Check if a breakdown with same amount and reason exists
+                    boolean found = false;
+                    for (FineBreakdown fb : breakdownList) {
+                        if (fb.amount == amount && fb.reason.equals(reason)) {
+                            fb.count++;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        breakdownList.add(new FineBreakdown(amount, reason));
+                    }
+                }
+
+                // Build fines message per user
+                for (String username : userTotalAmounts.keySet()) {
+                    int totalAmount = userTotalAmounts.get(username);
+                    List<FineBreakdown> breakdownList = userFineBreakdowns.get(username);
+
+                    // Build the breakdown string
+                    StringBuilder breakdownBuilder = new StringBuilder();
+                    breakdownBuilder.append("||(");
+                    for (int i = 0; i < breakdownList.size(); i++) {
+                        FineBreakdown fb = breakdownList.get(i);
+                        breakdownBuilder.append(fb.count).append("x").append(fb.amount).append(" b.ch. - ").append(fb.reason);
+                        if (i < breakdownList.size() - 1) {
+                            breakdownBuilder.append(", ");
+                        }
+                    }
+                    breakdownBuilder.append(")||");
+
+                    // Append to message
+                    messageBuilder.append(String.format("%d b.ch. - %s %s\n", totalAmount, username, breakdownBuilder.toString()));
+                }
+            }
+
+            // Send the message to Discord
+            sendDiscordWebhook(messageBuilder.toString());
+
+            logger.info("Voting results sent to Discord.");
+        } catch (Exception e) {
+            logger.error("Error during sending voting results to Discord: ", e);
+        }
+    }
+
+    // Handle entering election results (President only) [Method already exists]
+    private void handleElectionResults(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            HttpSession session = request.getSession(false);
+            if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
+                // Parse JSON from request body
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = request.getReader().readLine()) != null) {
+                    sb.append(line);
+                }
+                JSONArray electionResults = new JSONArray(sb.toString());
+
+                // Update electoral strengths of users
+                for (int i = 0; i < electionResults.length(); i++) {
+                    JSONObject result = electionResults.getJSONObject(i);
+                    String username = result.getString("username");
+                    int electoralStrength = result.getInt("electoralStrength");
+
+                    // Update user's electoral strength
+                    usersCollection.updateOne(
+                            eq("username", username),
+                            new Document("$set", new Document("electoralStrength", electoralStrength))
+                    );
+                }
+
+                response.setStatus(HttpServletResponse.SC_OK);
+                JSONObject resp = new JSONObject();
+                resp.put("message", "Election results processed successfully.");
+                response.setContentType("application/json");
+                response.getWriter().write(resp.toString());
+                logger.info("President updated electoral strengths from election results.");
+            } else {
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can submit election results.");
+                logger.warn("Unauthorized attempt to submit election results.");
+            }
+        } catch (Exception e) {
+            logger.error("Error during processing election results: ", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while processing election results.");
+        }
+    }
+    // Handle updating user information (President only)
+    private void handleUpdateUsers(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            HttpSession session = request.getSession(false);
+            if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
+                // Parse JSON array from request body
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = request.getReader().readLine()) != null) {
+                    sb.append(line);
+                }
+                JSONArray userUpdates = new JSONArray(sb.toString());
+
+                for (int i = 0; i < userUpdates.length(); i++) {
+                    JSONObject userUpdate = userUpdates.getJSONObject(i);
+                    String userId = userUpdate.getString("id");
+                    int electoralStrength = userUpdate.optInt("electoralStrength", 1);
+                    String partyAffiliation = userUpdate.optString("partyAffiliation", "");
+                    String role = userUpdate.optString("role", "MEMBER");
+
+                    // Validate role
+                    if (!Arrays.asList("MEMBER", "PRESIDENT", "OTHER_ROLE").contains(role)) {
+                        logger.warn("Invalid role '{}' provided for user ID '{}'. Skipping update.", role, userId);
+                        continue;
+                    }
+
+                    // Update the user document
+                    Document updateFields = new Document()
+                            .append("electoralStrength", electoralStrength)
+                            .append("partyAffiliation", partyAffiliation)
+                            .append("role", role);
+
+                    usersCollection.updateOne(
+                            eq("_id", new ObjectId(userId)),
+                            new Document("$set", updateFields)
+                    );
+                }
+
+                response.setStatus(HttpServletResponse.SC_OK);
+                JSONObject resp = new JSONObject();
+                resp.put("message", "User updates processed successfully.");
+                response.setContentType("application/json");
+                response.getWriter().write(resp.toString());
+                logger.info("President updated user information.");
+            } else {
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can update user information.");
+                logger.warn("Unauthorized attempt to update user information.");
+            }
+        } catch (Exception e) {
+            logger.error("Error during updating user information: ", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while updating user information.");
+        }
+    }
+
+
+    private void sendDiscordWebhook(String content) {
+        try {
+            URL url = new URL(discordWebhookUrl);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+
+            JSONObject payload = new JSONObject();
+            payload.put("content", content);
+
+            String jsonPayload = payload.toString();
+
+            try (OutputStream os = connection.getOutputStream()) {
+                byte[] input = jsonPayload.getBytes("utf-8");
+                os.write(input, 0, input.length);
+            }
+
+            int responseCode = connection.getResponseCode();
+            if (responseCode != 204) {
+                // Discord webhooks return 204 No Content on success
+                logger.error("Failed to send Discord webhook. Response code: " + responseCode);
+            }
+
+        } catch (Exception e) {
+            logger.error("Error sending Discord webhook: ", e);
+        }
+    }
+
+    // Handle imposing a fine on a user (President only)
     // Handle imposing a fine on a user (President only)
     private void handleImposeFine(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
@@ -641,14 +1238,18 @@ public class ParliamentServlet extends HttpServlet {
                     // Generate a unique fineId
                     String fineId = "FINE-" + System.currentTimeMillis();
 
-                    // Store fine reason in 'fineReasons' collection
+                    // Fetch current meeting number
+                    int meetingNumber = getCurrentMeetingNumber(); // Added this line
+
+                    // Store fine reason in 'fineReasons' collection with meetingNumber
                     Document fineReasonDoc = new Document("fineId", fineId)
                             .append("username", usernameToFine)
                             .append("amount", amount)
                             .append("reason", reason)
                             .append("timestamp", new Date())
                             .append("issuedBy", (String) session.getAttribute("username"))
-                            .append("status", "active");
+                            .append("status", "active")
+                            .append("meetingNumber", meetingNumber); // Added this line
                     fineReasonsCollection.insertOne(fineReasonDoc);
 
                     // Broadcast fine imposed via WebSocket
@@ -763,10 +1364,16 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
-    // Handle fetching all users
+    // Handle fetching all users (Updated to handle 'present' query parameter)
     private void handleGetUsers(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
-            List<Document> users = usersCollection.find().into(new ArrayList<>());
+            String presentParam = request.getParameter("present");
+            List<Document> users;
+            if ("true".equalsIgnoreCase(presentParam)) {
+                users = usersCollection.find(eq("present", true)).into(new ArrayList<>());
+            } else {
+                users = usersCollection.find().into(new ArrayList<>());
+            }
 
             JSONArray usersArray = new JSONArray();
             for (Document doc : users) {
@@ -784,7 +1391,7 @@ public class ParliamentServlet extends HttpServlet {
 
             response.setContentType("application/json");
             response.getWriter().write(usersArray.toString());
-            logger.info("Fetched all users.");
+            logger.info("Fetched users. Present only: {}", "true".equalsIgnoreCase(presentParam));
         } catch (Exception e) {
             logger.error("Error during fetching users: ", e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while fetching users.");
@@ -823,8 +1430,6 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
-
-
     // Handle fetching logged-in user's info
     private void handleUserInfo(HttpServletRequest request, HttpServletResponse response) throws IOException {
         HttpSession session = request.getSession(false);
@@ -851,6 +1456,13 @@ public class ParliamentServlet extends HttpServlet {
         try {
             List<Document> proposals = proposalsCollection.find().into(new ArrayList<>());
 
+            // Fetch user's votes to include their vote choice
+            HttpSession session = request.getSession(false);
+            String userId = null;
+            if (session != null && session.getAttribute("userId") != null) {
+                userId = (String) session.getAttribute("userId");
+            }
+
             JSONArray proposalsArray = new JSONArray();
             for (Document doc : proposals) {
                 JSONObject proposalJson = new JSONObject(doc.toJson());
@@ -859,6 +1471,28 @@ public class ParliamentServlet extends HttpServlet {
                 String id = doc.getObjectId("_id").toHexString();
                 proposalJson.put("id", id);
                 proposalJson.remove("_id");
+
+                // Include voting results if voting has ended
+                if (doc.getBoolean("votingEnded", false)) {
+                    proposalJson.put("passed", doc.getBoolean("passed", false));
+                    proposalJson.put("totalFor", doc.getInteger("totalFor", 0));
+                    proposalJson.put("totalAgainst", doc.getInteger("totalAgainst", 0));
+                }
+
+                // Include user's vote choice if available
+                if (userId != null) {
+                    Document vote = votesCollection.find(Filters.and(
+                            eq("proposalId", doc.getObjectId("_id")),
+                            eq("userId", new ObjectId(userId))
+                    )).first();
+                    if (vote != null) {
+                        proposalJson.put("userVote", vote.getString("voteChoice"));
+                    } else {
+                        proposalJson.put("userVote", "Abstain");
+                    }
+                } else {
+                    proposalJson.put("userVote", "Abstain");
+                }
 
                 proposalsArray.put(proposalJson);
             }

@@ -8,8 +8,7 @@ const loginTab = document.getElementById('login-tab');
 const registerTab = document.getElementById('register-tab');
 const loginForm = document.getElementById('login-form');
 const registerForm = document.getElementById('register-form');
-
-const mainContainer = document.getElementById('main-container');
+const mainContainer = document.getElementById('main-container'); // For index.html
 const logoutButton = document.getElementById('logout');
 const joinSeatButton = document.getElementById('join-seat');
 
@@ -29,6 +28,7 @@ const fineUsername = document.getElementById('fine-username');
 const fineAmount = document.getElementById('fine-amount');
 const callBreakButton = document.getElementById('call-break');
 const endSessionButton = document.getElementById('end-session');
+const endVotingButton = document.getElementById('end-voting'); // New button for ending voting
 
 const alertContainer = document.getElementById('alert');
 const alertMessage = document.getElementById('alert-message');
@@ -38,7 +38,7 @@ const endBreakButton = document.getElementById('end-break'); // End break button
 // ======================
 // State Variables
 // ======================
-let currentUser = null; // { username: '', role: '' }
+let currentUser = null; // { username: '', role: '', id: '' }
 let ws = null; // WebSocket connection
 
 // ======================
@@ -145,13 +145,74 @@ function renderProposals(proposals) {
     proposals.forEach(proposal => {
         const row = proposalsTable.insertRow();
         row.dataset.proposalId = proposal.id; // Use 'proposal.id'
-        row.innerHTML = `
-            <td class="py-2 px-4 border-b text-center">${proposal.proposalVisual}</td>
-            <td class="py-2 px-4 border-b text-center proposal-title">${proposal.title}</td>
-            <td class="py-2 px-4 border-b text-center proposal-party">${proposal.party}</td>
-            <td class="py-2 px-4 border-b text-center actions-cell"></td>
-        `;
-        addProposalActions(proposal, row); // Pass the row directly
+
+        // Create cells
+        const cellNumber = row.insertCell(0);
+        const cellTitle = row.insertCell(1);
+        const cellParty = row.insertCell(2);
+        const cellVote = row.insertCell(3);
+        const cellStatus = row.insertCell(4);
+
+        // Add 'text-center' class to center-align content
+        cellNumber.classList.add('py-2', 'px-4', 'border-b', 'text-center');
+        cellTitle.classList.add('py-2', 'px-4', 'border-b', 'text-center', 'break-words', 'whitespace-normal');
+        cellParty.classList.add('py-2', 'px-4', 'border-b', 'text-center');
+        cellVote.classList.add('py-2', 'px-4', 'border-b', 'text-center');
+        cellStatus.classList.add('py-2', 'px-4', 'border-b', 'text-center');
+
+        // Populate cells
+        cellNumber.textContent = proposal.proposalVisual;
+        cellTitle.textContent = proposal.title;
+        cellParty.textContent = proposal.party;
+
+        // Vote Radio Buttons
+        const voteChoices = ['For', 'Against', 'Abstain'];
+        const userVote = proposal.userVote || 'Abstain';
+
+        const voteForm = document.createElement('div');
+        voteForm.classList.add('flex', 'justify-center', 'space-x-4');
+
+        voteChoices.forEach(choice => {
+            const label = document.createElement('label');
+            label.classList.add('inline-flex', 'items-center', 'space-x-2');
+
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.name = `vote-${proposal.id}`; // Unique name per proposal
+            radio.value = choice;
+            radio.checked = (userVote === choice);
+            radio.disabled = proposal.votingEnded;
+            radio.classList.add('form-radio', 'h-5', 'w-5', 'text-blue-600');
+
+            radio.addEventListener('change', () => {
+                submitVote(proposal.id, choice);
+            });
+
+            const span = document.createElement('span');
+            span.classList.add('text-sm');
+            span.textContent = choice;
+
+            label.appendChild(radio);
+            label.appendChild(span);
+
+            voteForm.appendChild(label);
+        });
+
+        cellVote.appendChild(voteForm);
+
+        // Status
+        if (proposal.votingEnded) {
+            const statusText = proposal.passed ? 'Passed' : 'Failed';
+            const statusDetail = `For: ${proposal.totalFor}, Against: ${proposal.totalAgainst}`;
+            cellStatus.innerHTML = `<strong>${statusText}</strong><br>${statusDetail}`;
+        } else {
+            cellStatus.textContent = 'Voting in progress';
+        }
+
+        // Actions for President
+        if (currentUser && currentUser.role === 'PRESIDENT') {
+            addProposalActions(proposal, row);
+        }
     });
 }
 
@@ -198,7 +259,7 @@ function openEditProposalWindow(proposalId) {
     console.log("Editing proposal with id:", proposalId);
 
     const modal = document.createElement('div');
-    modal.classList.add('modal');
+    modal.classList.add('modal', 'fixed', 'inset-0', 'flex', 'items-center', 'justify-center', 'z-50', 'bg-black', 'bg-opacity-50');
     modal.innerHTML = `
         <div class="modal-content bg-gray-700 p-6 rounded">
             <h2 class="text-xl font-bold mb-4">Edit Proposal</h2>
@@ -308,13 +369,7 @@ function addOrUpdateSeat(user) {
             <p class="text-sm">Party: ${user.partyAffiliation || 'N/A'}</p>
             <p class="text-sm">Voličská síla: ${user.electoralStrength || 0}</p>
             <div class="user-actions space-x-2">
-                <button class="raise-hand-btn bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs">
-                    Raise Hand
-                </button>
-                <button class="object-btn bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs">
-                    Object
-                </button>
-                <!-- Cancel button will be conditionally added -->
+                <!-- Buttons will be dynamically added -->
             </div>
         `;
 
@@ -326,33 +381,6 @@ function addOrUpdateSeat(user) {
 
     // Always apply background color based on the seat status
     updateSeatBackground(seat, user.seatStatus);
-
-    // Remove the call to addPresidentControls
-    // Previously, we had:
-    // if (currentUser && currentUser.role === 'PRESIDENT') {
-    //     addPresidentControls(seat, user);
-    // }
-    // Since we're using a general "Cancel" button, this is no longer needed
-}
-
-
-
-
-function attachSeatEventListeners(seat, user) {
-    const raiseHandButton = seat.querySelector('.raise-hand');
-    const objectButton = seat.querySelector('.object');
-
-    raiseHandButton.addEventListener('click', () => {
-        if (raiseHandButton.textContent === 'Cancel') {
-            updateSeatStatus(user.id, 'NEUTRAL');
-        } else {
-            updateSeatStatus(user.id, 'REQUESTING_TO_SPEAK');
-        }
-    });
-
-    objectButton.addEventListener('click', () => {
-        updateSeatStatus(user.id, 'OBJECTING');
-    });
 }
 
 function updateSeatContent(seat, user) {
@@ -529,7 +557,6 @@ async function updateSeatStatus(userId, status) {
     }
 }
 
-
 async function fetchUserById(userId) {
     try {
         const response = await fetch(`/api/users/${userId}`, {
@@ -549,6 +576,30 @@ async function fetchUserById(userId) {
     }
 }
 
+/**
+ * Submits a vote for a proposal.
+ * @param {string} proposalId - The ID of the proposal.
+ * @param {string} voteChoice - The vote choice ("For", "Against", "Abstain").
+ */
+async function submitVote(proposalId, voteChoice) {
+    try {
+        const response = await fetch('/api/proposals/vote', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposalId, voteChoice })
+        });
+
+        if (response.ok) {
+            showAlert('Vote submitted successfully.', 'success');
+        } else {
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error submitting vote:', error);
+        showAlert('An error occurred while submitting your vote.', 'error');
+    }
+}
 
 // ======================
 // Event Listeners
@@ -558,30 +609,32 @@ async function fetchUserById(userId) {
  * Handles the Login form submission.
  * @param {Event} e - The form submit event.
  */
-loginForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const username = document.getElementById('login-username').value.trim();
-    const password = document.getElementById('login-password').value.trim();
+if (loginForm) { // Conditional check to prevent errors
+    loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value.trim();
 
-    try {
-        const response = await fetch('/api/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
+        try {
+            const response = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
 
-        if (response.ok) {
-            showAlert('Login successful!', 'success');
-            await initializeApp();
-        } else {
-            const errorText = await response.text();
-            showAlert(errorText || 'Login failed.', 'error');
+            if (response.ok) {
+                showAlert('Login successful!', 'success');
+                await initializeApp();
+            } else {
+                const errorText = await response.text();
+                showAlert(errorText || 'Login failed.', 'error');
+            }
+        } catch (error) {
+            console.error('Login error:', error);
+            showAlert('An error occurred during login.', 'error');
         }
-    } catch (error) {
-        console.error('Login error:', error);
-        showAlert('An error occurred during login.', 'error');
-    }
-});
+    });
+}
 
 function toggleBreakOverlay(isBreak) {
     console.log("toggleBreakOverlay called with isBreak:", isBreak);
@@ -593,6 +646,7 @@ function toggleBreakOverlay(isBreak) {
         mainContainer.classList.remove('hidden');
     }
 }
+
 endBreakButton.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/end-break', {
@@ -627,65 +681,68 @@ function handleEndBreak() {
  * Handles the Registration form submission.
  * @param {Event} e - The form submit event.
  */
-registerForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const username = document.getElementById('register-username').value.trim();
-    const password = document.getElementById('register-password').value.trim();
+if (registerForm) {
+    registerForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = document.getElementById('register-username').value.trim();
+        const password = document.getElementById('register-password').value.trim();
 
-    if (!username || !password) {
-        showAlert('Please fill in all fields.', 'warning');
-        return;
-    }
-
-    try {
-        const response = await fetch('/api/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
-
-        if (response.ok) {
-            showAlert('Registration successful! Please log in.', 'success');
-            registerForm.reset();
-            switchTab('login');
-        } else {
-            const errorText = await response.text();
-            showAlert(errorText || 'Registration failed.', 'error');
+        if (!username || !password) {
+            showAlert('Please fill in all fields.', 'warning');
+            return;
         }
-    } catch (error) {
-        console.error('Registration error:', error);
-        showAlert('An error occurred during registration.', 'error');
-    }
-});
+
+        try {
+            const response = await fetch('/api/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+
+            if (response.ok) {
+                showAlert('Registration successful! Please log in.', 'success');
+                registerForm.reset();
+                switchTab('login');
+            } else {
+                const errorText = await response.text();
+                showAlert(errorText || 'Registration failed.', 'error');
+            }
+        } catch (error) {
+            console.error('Registration error:', error);
+            showAlert('An error occurred during registration.', 'error');
+        }
+    });
+}
 
 /**
  * Handles the Logout button click.
  */
-logoutButton.addEventListener('click', async () => {
-    try {
-        const response = await fetch('/api/logout', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        });
+if (logoutButton) {
+    logoutButton.addEventListener('click', async () => {
+        try {
+            const response = await fetch('/api/logout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
 
-        if (response.ok) {
-            showAlert('Logged out successfully.', 'success');
-            resetApp();
-        } else {
-            const errorText = await response.text();
-            showAlert(errorText || 'Logout failed.', 'error');
+            if (response.ok) {
+                showAlert('Logged out successfully.', 'success');
+                resetApp();
+            } else {
+                const errorText = await response.text();
+                showAlert(errorText || 'Logout failed.', 'error');
+            }
+        } catch (error) {
+            console.error('Logout error:', error);
+            showAlert('An error occurred during logout.', 'error');
         }
-    } catch (error) {
-        console.error('Logout error:', error);
-        showAlert('An error occurred during logout.', 'error');
-    }
-});
+    });
+}
 
-function controlAssProposal(){
-    if (newProposalAssociationType.value.trim().localeCompare('normal') === 0){
+function controlAssProposal() {
+    if (newProposalAssociationType.value.trim().localeCompare('normal') === 0) {
         newAssociatedProposal.disabled = true;
-    }
-    else {
+    } else {
         newAssociatedProposal.disabled = false;
     }
 }
@@ -826,6 +883,31 @@ endSessionButton.addEventListener('click', async () => {
 });
 
 /**
+ * Ends the voting and counts the votes via Presidential Action.
+ */
+endVotingButton.addEventListener('click', async () => {
+    if (!confirm('Are you sure you want to end the voting and count the votes?')) return;
+
+    try {
+        const response = await fetch('/api/proposals/end-voting', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (response.ok) {
+            showAlert('Voting ended and votes counted successfully.', 'success');
+            await fetchProposals(); // Refresh proposals to show results
+        } else {
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error ending voting:', error);
+        showAlert('An error occurred while ending the voting.', 'error');
+    }
+});
+
+/**
  * Handles the "Join Seat" button click.
  */
 joinSeatButton.addEventListener('click', async () => {
@@ -870,7 +952,8 @@ function handleSeatUpdate(user) {
  * @param {HTMLElement} row - The table row element for the proposal.
  */
 function addProposalActions(proposal, row) {
-    const actionsCell = row.querySelector('.actions-cell');
+    const actionsCell = row.insertCell(5); // Assuming it's the 6th cell
+    actionsCell.classList.add('py-2', 'px-4', 'border-b', 'text-center');
     if (currentUser && currentUser.role === 'PRESIDENT') {
         actionsCell.innerHTML = `
             <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">
@@ -992,6 +1075,7 @@ async function initializeApp() {
     currentUser = await fetchUserInfo();
     if (currentUser && currentUser.role === 'PRESIDENT') {
         presidentActions.classList.remove('hidden');
+        endVotingButton.addEventListener('click', endVotingButton.onclick); // Attach event listener
     } else {
         presidentActions.classList.add('hidden');
     }
@@ -1034,6 +1118,7 @@ async function checkAuthentication() {
 
         if (currentUser.role === 'PRESIDENT') {
             presidentActions.classList.remove('hidden');
+            endVotingButton.addEventListener('click', endVotingButton.onclick); // Attach event listener
         } else {
             presidentActions.classList.add('hidden');
         }
@@ -1060,9 +1145,170 @@ window.addEventListener('DOMContentLoaded', () => {
     startPolling();
 
     // Attach event listeners for tab switching
-    loginTab.addEventListener('click', () => switchTab('login'));
-    registerTab.addEventListener('click', () => switchTab('register'));
+    if (loginTab && registerTab) { // Conditional check
+        loginTab.addEventListener('click', () => switchTab('login'));
+        registerTab.addEventListener('click', () => switchTab('register'));
+    }
 
     // Initial authentication check
     checkAuthentication();
 });
+// Check if we are on admin.html
+if (window.location.pathname.endsWith('/admin.html')) {
+    // Execute admin dashboard code
+    initializeAdminDashboard();
+}
+
+async function initializeAdminDashboard() {
+    currentUser = await fetchUserInfo();
+    if (!currentUser || currentUser.role !== 'PRESIDENT') {
+        // Redirect to login or show an error
+        alert('Access denied. Only the president can access this page.');
+        window.location.href = '/';
+        return;
+    }
+
+    const usersTableBody = document.querySelector('#users-table tbody');
+    const submitUserUpdatesButton = document.getElementById('submit-user-updates');
+
+    // Fetch all users
+    try {
+        const response = await fetch('/api/users', {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        if (response.ok) {
+            const users = await response.json();
+            renderUsersTable(users);
+        } else {
+            console.warn('Failed to fetch users.');
+            showAlert('Failed to fetch users.', 'error');
+        }
+    } catch (error) {
+        console.error('Error fetching users:', error);
+        showAlert('Error fetching users.', 'error');
+    }
+
+    submitUserUpdatesButton.addEventListener('click', async () => {
+        const userUpdates = [];
+        const rows = usersTableBody.querySelectorAll('tr');
+        rows.forEach(row => {
+            const userId = row.dataset.userid;
+            const electoralStrengthInput = row.querySelector('.electoral-strength');
+            const electoralStrength = parseInt(electoralStrengthInput.value.trim(), 10);
+
+            const partyAffiliationInput = row.querySelector('.party-affiliation');
+            const partyAffiliation = partyAffiliationInput.value.trim();
+
+            const roleSelect = row.querySelector('.user-role');
+            const role = roleSelect.value;
+
+            userUpdates.push({
+                id: userId,
+                electoralStrength: isNaN(electoralStrength) ? 1 : electoralStrength,
+                partyAffiliation: partyAffiliation,
+                role: role
+            });
+        });
+
+        if (userUpdates.length === 0) {
+            showAlert('No user updates to submit.', 'warning');
+            return;
+        }
+
+        // Send user updates to the server
+        try {
+            const response = await fetch('/api/users/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(userUpdates)
+            });
+
+            if (response.ok) {
+                showAlert('User updates submitted successfully.', 'success');
+            } else {
+                const errorText = await response.text();
+                showAlert(`Error: ${errorText}`, 'error');
+            }
+        } catch (error) {
+            console.error('Error submitting user updates:', error);
+            showAlert('An error occurred while submitting user updates.', 'error');
+        }
+    });
+}
+
+
+function renderUsersTable(users) {
+    const usersTableBody = document.querySelector('#users-table tbody');
+    usersTableBody.innerHTML = ''; // Clear existing rows
+
+    users.forEach(user => {
+        const row = document.createElement('tr');
+        row.dataset.userid = user.id;
+
+        const cellUsername = document.createElement('td');
+        cellUsername.classList.add('px-4', 'py-2', 'border');
+        cellUsername.textContent = user.username;
+
+        const cellElectoralStrength = document.createElement('td');
+        cellElectoralStrength.classList.add('px-4', 'py-2', 'border');
+        const electoralStrengthInput = document.createElement('input');
+        electoralStrengthInput.type = 'number';
+        electoralStrengthInput.classList.add('electoral-strength', 'w-full', 'px-2', 'py-1', 'rounded', 'bg-gray-800', 'text-white');
+        electoralStrengthInput.value = user.electoralStrength || 1;
+        cellElectoralStrength.appendChild(electoralStrengthInput);
+
+        const cellPartyAffiliation = document.createElement('td');
+        cellPartyAffiliation.classList.add('px-4', 'py-2', 'border');
+        const partyAffiliationInput = document.createElement('input');
+        partyAffiliationInput.type = 'text';
+        partyAffiliationInput.classList.add('party-affiliation', 'w-full', 'px-2', 'py-1', 'rounded', 'bg-gray-800', 'text-white');
+        partyAffiliationInput.value = user.partyAffiliation || '';
+        cellPartyAffiliation.appendChild(partyAffiliationInput);
+
+        const cellRole = document.createElement('td');
+        cellRole.classList.add('px-4', 'py-2', 'border');
+        const roleSelect = document.createElement('select');
+        roleSelect.classList.add('user-role', 'w-full', 'px-2', 'py-1', 'rounded', 'bg-gray-800', 'text-white');
+        ['MEMBER', 'PRESIDENT', 'OTHER_ROLE'].forEach(roleOption => {
+            const option = document.createElement('option');
+            option.value = roleOption;
+            option.textContent = roleOption;
+            if (user.role === roleOption) {
+                option.selected = true;
+            }
+            roleSelect.appendChild(option);
+        });
+        cellRole.appendChild(roleSelect);
+
+        row.appendChild(cellUsername);
+        row.appendChild(cellElectoralStrength);
+        row.appendChild(cellPartyAffiliation);
+        row.appendChild(cellRole);
+
+        usersTableBody.appendChild(row);
+    });
+}
+
+// Existing showAlert function (ensure it's accessible in this context)
+function showAlert(message, type = 'success') {
+    const alertContainer = document.getElementById('alert');
+    const alertMessage = document.getElementById('alert-message');
+
+    alertMessage.innerText = message;
+    alertContainer.className = ''; // Reset classes
+
+    // Set classes based on alert type
+    if (type === 'success') {
+        alertContainer.classList.add('block', 'px-4', 'py-3', 'rounded', 'shadow-lg', 'mb-4', 'bg-green-100', 'border', 'border-green-400', 'text-green-700');
+    } else if (type === 'error') {
+        alertContainer.classList.add('block', 'px-4', 'py-3', 'rounded', 'shadow-lg', 'mb-4', 'bg-red-100', 'border', 'border-red-400', 'text-red-700');
+    } else if (type === 'warning') {
+        alertContainer.classList.add('block', 'px-4', 'py-3', 'rounded', 'shadow-lg', 'mb-4', 'bg-yellow-100', 'border', 'border-yellow-400', 'text-yellow-700');
+    }
+
+    // Automatically hide after 5 seconds
+    setTimeout(() => {
+        alertContainer.classList.add('hidden');
+    }, 5000);
+}
