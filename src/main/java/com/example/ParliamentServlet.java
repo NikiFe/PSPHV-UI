@@ -1170,6 +1170,25 @@ public class ParliamentServlet extends HttpServlet {
 
     private void sendDiscordWebhook(String content) {
         try {
+            if (discordWebhookUrl == null || discordWebhookUrl.isEmpty()) {
+                logger.warn("Discord webhook URL is not configured. Skipping sending results to Discord.");
+                return;
+            }
+
+            // Split content into chunks of max 2000 characters
+            List<String> chunks = splitContentIntoChunks(content);
+
+            for (String chunk : chunks) {
+                sendDiscordWebhookChunk(chunk);
+            }
+
+        } catch (Exception e) {
+            logger.error("Error sending Discord webhook: ", e);
+        }
+    }
+
+    private void sendDiscordWebhookChunk(String content) {
+        try {
             URL url = new URL(discordWebhookUrl);
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
@@ -1195,6 +1214,88 @@ public class ParliamentServlet extends HttpServlet {
         } catch (Exception e) {
             logger.error("Error sending Discord webhook: ", e);
         }
+    }
+
+    private List<String> splitContentIntoChunks(String content) {
+        List<String> chunks = new ArrayList<>();
+        String[] lines = content.split("\n");
+        StringBuilder currentChunk = new StringBuilder();
+
+        for (String line : lines) {
+            // Check if adding the line exceeds the limit
+            if (currentChunk.length() + line.length() + 1 <= 2000) {
+                if (currentChunk.length() > 0) {
+                    currentChunk.append("\n");
+                }
+                currentChunk.append(line);
+            } else {
+                // If the line itself is too long, split it
+                if (line.length() > 2000) {
+                    // Add the current chunk to the list
+                    if (currentChunk.length() > 0) {
+                        chunks.add(currentChunk.toString());
+                        currentChunk = new StringBuilder();
+                    }
+                    // Split the long line and add its parts
+                    List<String> splitLines = splitLineIntoChunks(line, 2000);
+                    chunks.addAll(splitLines);
+                } else {
+                    // Start a new chunk
+                    if (currentChunk.length() > 0) {
+                        chunks.add(currentChunk.toString());
+                        currentChunk = new StringBuilder();
+                    }
+                    currentChunk.append(line);
+                }
+            }
+        }
+        // Add any remaining content
+        if (currentChunk.length() > 0) {
+            chunks.add(currentChunk.toString());
+        }
+        return chunks;
+    }
+
+    private List<String> splitLineIntoChunks(String line, int maxChunkSize) {
+        List<String> chunks = new ArrayList<>();
+        if (line.length() <= maxChunkSize) {
+            chunks.add(line);
+        } else {
+            // Try splitting by spaces (words)
+            String[] words = line.split(" ");
+            StringBuilder currentChunk = new StringBuilder();
+            for (String word : words) {
+                // Check if adding the word exceeds the limit
+                if (currentChunk.length() + word.length() + 1 <= maxChunkSize) {
+                    if (currentChunk.length() > 0) {
+                        currentChunk.append(" ");
+                    }
+                    currentChunk.append(word);
+                } else {
+                    // Add the current chunk
+                    if (currentChunk.length() > 0) {
+                        chunks.add(currentChunk.toString());
+                        currentChunk = new StringBuilder();
+                    }
+                    // If the word itself is too long, split it arbitrarily
+                    if (word.length() > maxChunkSize) {
+                        int index = 0;
+                        while (index < word.length()) {
+                            int endIndex = Math.min(index + maxChunkSize, word.length());
+                            chunks.add(word.substring(index, endIndex));
+                            index = endIndex;
+                        }
+                    } else {
+                        currentChunk.append(word);
+                    }
+                }
+            }
+            // Add any remaining content
+            if (currentChunk.length() > 0) {
+                chunks.add(currentChunk.toString());
+            }
+        }
+        return chunks;
     }
 
     // Handle imposing a fine on a user (President only)
