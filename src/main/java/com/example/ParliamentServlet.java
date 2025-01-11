@@ -958,10 +958,6 @@ public class ParliamentServlet extends HttpServlet {
             // "Předseda: **Vitjaaa**"
             messageBuilder.append("Předseda: **").append(chairmanName).append("**\n\n");
 
-            // Next meeting date placeholder
-            String nextMeetingDate = "TBD"; // Replace with actual date if available
-            messageBuilder.append("Další jednání: ").append(nextMeetingDate).append("\n\n");
-
             // "Docházka:"
             messageBuilder.append("Docházka:\n");
 

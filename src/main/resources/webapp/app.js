@@ -230,7 +230,7 @@ function refreshData() {
  * Starts polling every 1 second to update proposals and users.
  */
 function startPolling() {
-    setInterval(refreshData, 1000); // Poll data every 1 second
+    setInterval(refreshData, 5000); // Poll data every 1 second
 }
 
 async function removeProposal(proposalId) {
