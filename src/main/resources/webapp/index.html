@@ -6,107 +6,68 @@
     <!-- Tailwind CSS CDN with Forms Plugin -->
     <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
     <script>
-        // Enable dark mode by default
         tailwind.config = {
             darkMode: 'class',
-            theme: {
-                extend: {},
-            },
+            theme: { extend: {} },
         }
     </script>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-            href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600&family=Open+Sans:wght@400;500&display=swap"
-            rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600&family=Open+Sans:wght@400;500&display=swap" rel="stylesheet">
     <style>
-        /* Custom scrollbar for better aesthetics */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #2d3748; /* Gray-800 */
-        }
-        ::-webkit-scrollbar-thumb {
-            background-color: #4a5568; /* Gray-700 */
-            border-radius: 4px;
-            border: 2px solid #2d3748;
-        }
-
-        body {
-            font-family: 'Open Sans', sans-serif;
-        }
-
-        .main-title {
-            font-family: 'Montserrat', sans-serif;
-        }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #2d3748; }
+        ::-webkit-scrollbar-thumb { background-color: #4a5568; border-radius: 4px; border: 2px solid #2d3748; }
+        body { font-family: 'Open Sans', sans-serif; }
+        .main-title { font-family: 'Montserrat', sans-serif; }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 transition-colors duration-500">
 <!-- Authentication Container -->
 <div id="auth-container" class="flex items-center justify-center min-h-screen">
     <div class="bg-gray-800 p-8 rounded shadow-md w-full max-w-md">
-        <!-- Tabs for Login and Register -->
         <div class="flex mb-6">
-            <button id="login-tab"
-                    class="flex-1 py-2 px-4 text-center text-blue-400 border-b-2 border-blue-400 font-semibold main-title">
+            <button id="login-tab" class="flex-1 py-2 px-4 text-center text-blue-400 border-b-2 border-blue-400 font-semibold main-title">
                 Login
             </button>
-            <button id="register-tab"
-                    class="flex-1 py-2 px-4 text-center text-gray-400 border-b-2 border-transparent hover:border-gray-600 font-semibold main-title">
+            <button id="register-tab" class="flex-1 py-2 px-4 text-center text-gray-400 border-b-2 border-transparent hover:border-gray-600 font-semibold main-title">
                 Register
             </button>
         </div>
-
-        <!-- Login Form -->
         <form id="login-form" class="space-y-4">
             <div>
                 <label for="login-username" class="block text-gray-300">Username</label>
-                <input type="text" id="login-username" name="username" required
-                       class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600
-                              rounded-md focus:outline-none focus:ring focus:border-blue-500">
+                <input type="text" id="login-username" name="username" required class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring focus:border-blue-500">
             </div>
             <div>
                 <label for="login-password" class="block text-gray-300">Password</label>
-                <input type="password" id="login-password" name="password" required
-                       class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600
-                              rounded-md focus:outline-none focus:ring focus:border-blue-500">
+                <input type="password" id="login-password" name="password" required class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring focus:border-blue-500">
             </div>
-            <button type="submit"
-                    class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded font-semibold">
+            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded font-semibold">
                 Login
             </button>
         </form>
-
-        <!-- Registration Form (Hidden by Default) -->
         <form id="register-form" class="space-y-4 hidden">
             <div>
                 <label for="register-username" class="block text-gray-300">Username</label>
-                <input type="text" id="register-username" name="username" required
-                       class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600
-                              rounded-md focus:outline-none focus:ring focus:border-green-500">
+                <input type="text" id="register-username" name="username" required class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring focus:border-green-500">
             </div>
             <div>
                 <label for="register-password" class="block text-gray-300">Password</label>
-                <input type="password" id="register-password" name="password" required
-                       class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600
-                              rounded-md focus:outline-none focus:ring focus:border-green-500">
+                <input type="password" id="register-password" name="password" required class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring focus:border-green-500">
             </div>
-            <button type="submit"
-                    class="w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded font-semibold">
+            <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded font-semibold">
                 Register
             </button>
         </form>
-
-        <!-- Alert Messages -->
         <div id="alert" class="mt-4 hidden">
             <p id="alert-message" class="text-center text-sm"></p>
         </div>
     </div>
 </div>
 
-<!-- Main Application Interface (Hidden by Default) -->
+<!-- Main Application Interface -->
 <div id="main-container" class="hidden">
     <header class="bg-gray-800 p-4 text-gray-100 flex justify-between items-center">
         <h1 class="text-2xl font-semibold main-title">PSPHVUI</h1>
@@ -122,29 +83,53 @@
 
     <main class="p-4">
         <!-- Seat Layout -->
-        <div id="seat-layout"
-             class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6 overflow-y-auto max-h-96">
+        <div id="seat-layout" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6 overflow-y-auto max-h-96">
             <!-- Seats will be dynamically injected here -->
+        </div>
+
+        <!-- Constitutional Proposals Section -->
+        <div id="constitutional-proposals-section" class="mb-6 hidden">
+            <h2 class="text-2xl font-bold mb-4 text-center main-title">Constitutional Proposals</h2>
+            <div class="overflow-x-auto">
+                <table id="constitutional-proposals-table" class="min-w-full bg-gray-700 rounded-md">
+                    <thead>
+                    <tr>
+                        <th class="py-2 px-4 border-b text-center">#</th>
+                        <th class="py-2 px-4 border-b text-center">Title</th>
+                        <th class="py-2 px-4 border-b text-center">Party</th>
+                        <th class="py-2 px-4 border-b text-center">Your Vote</th>
+                        <th class="py-2 px-4 border-b text-center">Status</th>
+                        <th class="py-2 px-4 border-b text-center">Vote Requirement</th>
+                        <th class="py-2 px-4 border-b text-center">Stupid?</th>
+                        <th class="py-2 px-4 border-b text-center">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody id="constitutional-proposals-table-body">
+                    <!-- Constitutional proposals will be inserted here -->
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <!-- Priority Proposals Section -->
         <div id="priority-proposals-section" class="mb-6 hidden">
             <h2 class="text-2xl font-bold mb-4 text-center main-title">Priority Proposals</h2>
             <div class="overflow-x-auto">
-                <table class="min-w-full bg-gray-700 rounded-md">
+                <table id="priority-proposals-table" class="min-w-full bg-gray-700 rounded-md">
                     <thead>
                     <tr>
-                        <th class="py-2 px-4 border-b text-center w-1/12">#</th>
-                        <th class="py-2 px-4 border-b text-center w-4/12">Title</th>
-                        <th class="py-2 px-4 border-b text-center w-2/12">Party</th>
-                        <th class="py-2 px-4 border-b text-center w-3/12">Your Vote</th>
-                        <th class="py-2 px-4 border-b text-center w-2/12">Status</th>
-                        <th id="priority-stupid-header" class="py-2 px-4 border-b text-center w-1/12">Stupid?</th>
-                        <th class="py-2 px-4 border-b text-center w-1/12">Actions</th>
+                        <th class="py-2 px-4 border-b text-center">#</th>
+                        <th class="py-2 px-4 border-b text-center">Title</th>
+                        <th class="py-2 px-4 border-b text-center">Party</th>
+                        <th class="py-2 px-4 border-b text-center">Your Vote</th>
+                        <th class="py-2 px-4 border-b text-center">Status</th>
+                        <th class="py-2 px-4 border-b text-center">Vote Requirement</th>
+                        <th id="priority-stupid-header" class="py-2 px-4 border-b text-center">Stupid?</th>
+                        <th class="py-2 px-4 border-b text-center">Actions</th>
                     </tr>
                     </thead>
-                    <tbody id="priority-proposals-table">
-                    <!-- Priority proposals get inserted here -->
+                    <tbody id="priority-proposals-table-body">
+                    <!-- Priority proposals will be inserted here -->
                     </tbody>
                 </table>
             </div>
@@ -157,64 +142,61 @@
                 <table class="min-w-full bg-gray-700 rounded-md">
                     <thead>
                     <tr>
-                        <th class="py-2 px-4 border-b text-center w-1/12">#</th>
-                        <th class="py-2 px-4 border-b text-center w-4/12">Title</th>
-                        <th class="py-2 px-4 border-b text-center w-2/12">Party</th>
-                        <th class="py-2 px-4 border-b text-center w-3/12">Your Vote</th>
-                        <th class="py-2 px-4 border-b text-center w-2/12">Status</th>
-                        <th id="normal-stupid-header" class="py-2 px-4 border-b text-center w-1/12">Stupid?</th>
-                        <th class="py-2 px-4 border-b text-center w-1/12">Actions</th>
+                        <th class="py-2 px-4 border-b text-center">#</th>
+                        <th class="py-2 px-4 border-b text-center">Title</th>
+                        <th class="py-2 px-4 border-b text-center">Party</th>
+                        <th class="py-2 px-4 border-b text-center">Your Vote</th>
+                        <th class="py-2 px-4 border-b text-center">Status</th>
+                        <th class="py-2 px-4 border-b text-center">Vote Requirement</th>
+                        <th id="normal-stupid-header" class="py-2 px-4 border-b text-center">Stupid?</th>
+                        <th class="py-2 px-4 border-b text-center">Actions</th>
                     </tr>
                     </thead>
                     <tbody id="proposals-table">
-                    <!-- Normal proposals dynamically inserted here -->
+                    <!-- Normal proposals will be dynamically inserted here -->
                     </tbody>
                 </table>
             </div>
         </div>
 
         <!-- Presidential Actions -->
-        <div id="president-actions" class="hidden mb-6">
+        <div id="president-actions" class="mb-6">
             <h2 class="text-xl font-bold mb-2 main-title">Presidential Actions</h2>
             <div class="space-y-4">
-                <!-- Add Proposal (without "Stupid") -->
+                <!-- Add Proposal Section -->
                 <div>
                     <h3 class="font-semibold mb-1 main-title">Add Proposal</h3>
-                    <!-- Title is a multiline textarea -->
-                    <textarea id="new-proposal-title" placeholder="Proposal Title (multi-line)..."
-                              rows="4"
-                              class="w-full px-3 py-2 border border-gray-600 rounded-md
-                                     bg-gray-700 text-gray-100 focus:outline-none focus:ring
-                                     focus:border-blue-500"></textarea>
+                    <textarea id="new-proposal-title" placeholder="Proposal Title (multi-line)..." rows="4" class="w-full px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500"></textarea>
+                    <input type="text" id="new-proposal-party" placeholder="Proposing Party" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
 
-                    <input type="text" id="new-proposal-party" placeholder="Proposing Party"
-                           class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md
-                                  bg-gray-700 text-gray-100 focus:outline-none focus:ring
-                                  focus:border-blue-500">
+                    <!-- NEW: Proposal Category -->
+                    <label for="new-proposal-category" class="mt-2 block text-gray-100">Category:</label>
+                    <select id="new-proposal-category" class="w-full mt-1 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
+                        <option value="normal">Normal</option>
+                        <option value="priority">Priority</option>
+                        <option value="constitutional">Constitutional</option>
+                    </select>
 
-                    <label for="new-proposal-priority" class="inline-flex items-center mt-2">
-                        <input type="checkbox" id="new-proposal-priority"
-                               class="form-checkbox h-5 w-5 text-blue-600">
-                        <span class="ml-2 text-gray-100">Priority</span>
-                    </label>
+                    <!-- NEW: Vote Requirement -->
+                    <label for="new-proposal-vote-requirement" class="mt-2 block text-gray-100">Vote Requirement:</label>
+                    <select id="new-proposal-vote-requirement" class="w-full mt-1 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
+                        <option value="Rel">Rel (default)</option>
+                        <option value="2/3+">2/3+</option>
+                        <option value="2/3">2/3</option>
+                        <option value="3/5+">3/5+</option>
+                        <option value="3/5">3/5</option>
+                        <option value="1/2+">1/2+</option>
+                        <option value="1/2">1/2</option>
+                    </select>
 
-                    <select onchange="controlAssProposal()"
-                            id="new-proposal-association-type"
-                            class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md
-                                   bg-gray-700 text-gray-100 focus:outline-none focus:ring
-                                   focus:border-blue-500">
+                    <select id="new-proposal-association-type" onchange="controlAssProposal()" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
                         <option value="normal">Normal</option>
                         <option value="additive">Additive</option>
                         <option value="countering">Countering</option>
                     </select>
+                    <input disabled type="text" id="new-associated-proposal" placeholder="Associated Proposal" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
 
-                    <input disabled type="text" id="new-associated-proposal" placeholder="Associated Proposal"
-                           class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md
-                                  bg-gray-700 text-gray-100 focus:outline-none focus:ring
-                                  focus:border-blue-500">
-
-                    <button id="add-proposal"
-                            class="mt-2 bg-blue-600 hover:bg-blue-700 text-white py-1 px-3 rounded font-semibold">
+                    <button id="add-proposal" class="mt-2 bg-blue-600 hover:bg-blue-700 text-white py-1 px-3 rounded font-semibold">
                         Add Proposal
                     </button>
                 </div>
@@ -222,59 +204,47 @@
                 <!-- Impose Fine -->
                 <div>
                     <h3 class="font-semibold mb-1 main-title">Impose Fine</h3>
-                    <input type="text" id="fine-username" placeholder="Username"
-                           class="w-full px-3 py-2 border border-gray-600 rounded-md
-                                  bg-gray-700 text-gray-100 focus:outline-none focus:ring
-                                  focus:border-red-500">
-                    <input type="number" id="fine-amount" placeholder="Amount"
-                           class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md
-                                  bg-gray-700 text-gray-100 focus:outline-none focus:ring
-                                  focus:border-red-500">
-                    <input type="text" id="fine-reason" placeholder="Reason for Fine"
-                           class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md
-                                  bg-gray-700 text-gray-100 focus:outline-none focus:ring
-                                  focus:border-red-500">
-                    <button id="impose-fine"
-                            class="mt-2 bg-red-600 hover:bg-red-700 text-white py-1 px-3 rounded font-semibold">
+                    <input type="text" id="fine-username" placeholder="Username" class="w-full px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-red-500">
+                    <input type="number" id="fine-amount" placeholder="Amount" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-red-500">
+                    <input type="text" id="fine-reason" placeholder="Reason for Fine" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-red-500">
+                    <button id="impose-fine" class="mt-2 bg-red-600 hover:bg-red-700 text-white py-1 px-3 rounded font-semibold">
                         Impose Fine
                     </button>
                 </div>
 
                 <!-- Call Break -->
                 <div>
-                    <button id="call-break"
-                            class="bg-yellow-500 hover:bg-yellow-600 text-gray-900 py-2 px-4 rounded font-semibold">
+                    <button id="call-break" class="bg-yellow-500 hover:bg-yellow-600 text-gray-900 py-2 px-4 rounded font-semibold">
                         Call Break
                     </button>
                 </div>
                 <!-- End Break -->
                 <div>
-                    <button id="end-break"
-                            class="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded hidden font-semibold">
+                    <button id="end-break" class="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded hidden font-semibold">
                         End Break
                     </button>
                 </div>
-
                 <!-- End Priority Voting -->
                 <div>
-                    <button id="end-priority-voting"
-                            class="bg-yellow-500 hover:bg-yellow-600 text-white py-2 px-4 rounded font-semibold">
+                    <button id="end-priority-voting" class="bg-yellow-500 hover:bg-yellow-600 text-white py-2 px-4 rounded font-semibold">
                         End Priority Voting
                     </button>
                 </div>
-
-                <!-- End Voting -->
+                <!-- End Normal Voting -->
                 <div>
-                    <button id="end-voting"
-                            class="bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded font-semibold">
+                    <button id="end-voting" class="bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded font-semibold">
                         End Voting
                     </button>
                 </div>
-
+                <!-- NEW: End Constitutional Voting -->
+                <div>
+                    <button id="end-constitutional-voting" class="bg-purple-500 hover:bg-purple-600 text-white py-2 px-4 rounded font-semibold">
+                        End Constitutional Voting
+                    </button>
+                </div>
                 <!-- End Session -->
                 <div>
-                    <button id="end-session"
-                            class="bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded font-semibold">
+                    <button id="end-session" class="bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded font-semibold">
                         End Session
                     </button>
                 </div>
@@ -284,12 +254,10 @@
 </div>
 
 <!-- Break Overlay -->
-<div id="break-overlay"
-     class="fixed inset-0 bg-gray-900 flex items-center justify-center text-4xl font-bold text-white hidden">
+<div id="break-overlay" class="fixed inset-0 bg-gray-900 flex items-center justify-center text-4xl font-bold text-white hidden">
     BREAK
 </div>
 
-<!-- Frontend JavaScript -->
 <script src="app.js"></script>
 </body>
 </html>

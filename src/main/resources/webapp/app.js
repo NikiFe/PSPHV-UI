@@ -21,6 +21,11 @@ const priorityProposalsSection = document.getElementById('priority-proposals-sec
 const priorityProposalsTable = document.getElementById('priority-proposals-table');
 const priorityStupidHeader = document.getElementById('priority-stupid-header');
 
+// NEW: Constitutional proposals section and table
+const constitutionalProposalsSection = document.getElementById('constitutional-proposals-section');
+const constitutionalProposalsTable = document.getElementById('constitutional-proposals-table');
+
+
 // President Actions
 const presidentActions = document.getElementById('president-actions');
 const addProposalButton = document.getElementById('add-proposal');
@@ -29,6 +34,10 @@ const newProposalParty = document.getElementById('new-proposal-party');
 const newProposalPriority = document.getElementById('new-proposal-priority');
 const newProposalAssociationType = document.getElementById('new-proposal-association-type');
 const newAssociatedProposal = document.getElementById('new-associated-proposal');
+// NEW: New dropdowns for proposal category and vote requirement
+const newProposalCategory = document.getElementById('new-proposal-category');
+const newProposalVoteRequirement = document.getElementById('new-proposal-vote-requirement');
+
 
 const imposeFineButton = document.getElementById('impose-fine');
 const fineUsername = document.getElementById('fine-username');
@@ -37,6 +46,9 @@ const callBreakButton = document.getElementById('call-break');
 const endSessionButton = document.getElementById('end-session');
 const endVotingButton = document.getElementById('end-voting');
 const endPriorityVotingButton = document.getElementById('end-priority-voting');
+// NEW: End Constitutional Voting button
+const endConstitutionalVotingButton = document.getElementById('end-constitutional-voting');
+
 
 const alertContainer = document.getElementById('alert');
 const alertMessage = document.getElementById('alert-message');
@@ -118,6 +130,111 @@ async function fetchUserInfo() {
     }
 }
 
+function renderConstitutionalProposals(proposals) {
+    constitutionalProposalsTable.innerHTML = '';
+    if (!proposals || proposals.length === 0) {
+        constitutionalProposalsSection.classList.add('hidden');
+        return;
+    }
+    constitutionalProposalsSection.classList.remove('hidden');
+    proposals.forEach(proposal => {
+        const row = constitutionalProposalsTable.insertRow();
+        row.dataset.proposalId = proposal.id;
+
+        const cellNumber  = row.insertCell(0);
+        const cellTitle   = row.insertCell(1);
+        const cellParty   = row.insertCell(2);
+        const cellVote    = row.insertCell(3);
+        const cellStatus  = row.insertCell(4);
+        const cellVoteReq = row.insertCell(5); // NEW: Vote Requirement cell
+        const cellStupid  = row.insertCell(6);
+        const cellActions = row.insertCell(7);
+
+        cellNumber.classList.add('py-2','px-4','border-b','text-center');
+        cellTitle.classList.add('py-2','px-4','border-b','text-center','break-words','whitespace-pre-wrap');
+        cellParty.classList.add('py-2','px-4','border-b','text-center');
+        cellVote.classList.add('py-2','px-4','border-b','text-center');
+        cellStatus.classList.add('py-2','px-4','border-b','text-center');
+        cellVoteReq.classList.add('py-2','px-4','border-b','text-center');
+        cellStupid.classList.add('py-2','px-4','border-b','text-center');
+        cellActions.classList.add('py-2','px-4','border-b','text-center');
+
+        cellNumber.textContent = proposal.proposalVisual || '';
+        cellTitle.textContent = proposal.title || '';
+        cellParty.textContent = proposal.party || '';
+
+        if (proposal.stupid) {
+            cellVote.innerHTML = '(Stupid, no voting)';
+        } else {
+            // (Render voting radio buttons as before)
+            const voteChoices = ['For','Against','Abstain'];
+            const userVote = proposal.userVote || 'Abstain';
+            const voteForm = document.createElement('div');
+            voteForm.classList.add('flex','justify-center','space-x-4');
+            voteChoices.forEach(choice => {
+                const label = document.createElement('label');
+                label.classList.add('inline-flex','items-center','space-x-2');
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = `vote-${proposal.id}`;
+                radio.value = choice;
+                radio.checked = (userVote === choice);
+                radio.disabled = proposal.votingEnded;
+                radio.classList.add('form-radio','h-5','w-5','text-blue-600');
+                radio.addEventListener('change', () => {
+                    submitVote(proposal.id, choice);
+                });
+                const span = document.createElement('span');
+                span.classList.add('text-sm');
+                span.textContent = choice;
+                label.appendChild(radio);
+                label.appendChild(span);
+                voteForm.appendChild(label);
+            });
+            cellVote.appendChild(voteForm);
+        }
+
+        if (proposal.votingEnded) {
+            const statusText = proposal.passed ? 'Passed' : 'Failed';
+            const statusDetail = `For: ${proposal.totalFor}, Against: ${proposal.totalAgainst}`;
+            cellStatus.innerHTML = `<strong>${statusText}</strong><br>${statusDetail}`;
+        } else {
+            cellStatus.textContent = 'Voting in progress (constitutional)';
+        }
+
+        // NEW: Set Vote Requirement cell
+        cellVoteReq.textContent = proposal.voteRequirement || 'Rel';
+
+        if (currentUser && currentUser.role === 'PRESIDENT') {
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = proposal.stupid === true;
+            checkbox.classList.add('form-checkbox','h-5','w-5','text-blue-600');
+            checkbox.addEventListener('change', () => {
+                toggleStupidProposal(proposal.id, checkbox.checked);
+            });
+            cellStupid.appendChild(checkbox);
+        } else {
+            cellStupid.innerHTML = proposal.stupid ? 'Yes' : 'No';
+        }
+
+        if (currentUser && currentUser.role === 'PRESIDENT') {
+            cellActions.innerHTML = `
+                <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Edit</button>
+                <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Remove</button>
+            `;
+            cellActions.querySelector('.edit-proposal').addEventListener('click', () => {
+                openEditProposalWindow(proposal.id);
+            });
+            cellActions.querySelector('.remove-proposal').addEventListener('click', () => {
+                removeProposal(proposal.id);
+            });
+        } else {
+            cellActions.innerHTML = '—';
+        }
+    });
+}
+
 async function fetchProposals() {
     try {
         const response = await fetch('/api/proposals', {
@@ -126,9 +243,11 @@ async function fetchProposals() {
         });
         if (response.ok) {
             const allProposals = await response.json();
+            // Split proposals into three groups:
+            const constitutionalProposals = allProposals.filter(p => p.isConstitutional === true);
             const priorityProposals = allProposals.filter(p => p.isPriority === true);
-            const normalProposals   = allProposals.filter(p => !p.isPriority);
-
+            const normalProposals = allProposals.filter(p => !p.isPriority && !p.isConstitutional);
+            renderConstitutionalProposals(constitutionalProposals);
             renderPriorityProposals(priorityProposals);
             renderProposals(normalProposals);
         } else {
@@ -172,20 +291,22 @@ function renderProposals(proposals) {
         const row = proposalsTable.insertRow();
         row.dataset.proposalId = proposal.id;
 
-        // 7 columns
+        // 8 columns: new cell for Vote Requirement inserted after Status
         const cellNumber  = row.insertCell(0);
         const cellTitle   = row.insertCell(1);
         const cellParty   = row.insertCell(2);
         const cellVote    = row.insertCell(3);
         const cellStatus  = row.insertCell(4);
-        const cellStupid  = row.insertCell(5);
-        const cellActions = row.insertCell(6);
+        const cellVoteReq = row.insertCell(5); // NEW: Vote Requirement
+        const cellStupid  = row.insertCell(6);
+        const cellActions = row.insertCell(7);
 
         cellNumber.classList.add('py-2','px-4','border-b','text-center');
         cellTitle.classList.add('py-2','px-4','border-b','text-center','break-words','whitespace-pre-wrap');
         cellParty.classList.add('py-2','px-4','border-b','text-center');
         cellVote.classList.add('py-2','px-4','border-b','text-center');
         cellStatus.classList.add('py-2','px-4','border-b','text-center');
+        cellVoteReq.classList.add('py-2','px-4','border-b','text-center');
         cellStupid.classList.add('py-2','px-4','border-b','text-center');
         cellActions.classList.add('py-2','px-4','border-b','text-center');
 
@@ -194,20 +315,15 @@ function renderProposals(proposals) {
         cellParty.textContent = proposal.party || '';
 
         if (proposal.stupid) {
-            // No voting if stupid
             cellVote.innerHTML = '(Stupid, no voting)';
         } else {
-            // Normal voting
             const voteChoices = ['For','Against','Abstain'];
             const userVote = proposal.userVote || 'Abstain';
-
             const voteForm = document.createElement('div');
             voteForm.classList.add('flex','justify-center','space-x-4');
-
             voteChoices.forEach(choice => {
                 const label = document.createElement('label');
                 label.classList.add('inline-flex','items-center','space-x-2');
-
                 const radio = document.createElement('input');
                 radio.type = 'radio';
                 radio.name = `vote-${proposal.id}`;
@@ -215,20 +331,16 @@ function renderProposals(proposals) {
                 radio.checked = (userVote === choice);
                 radio.disabled = proposal.votingEnded;
                 radio.classList.add('form-radio','h-5','w-5','text-blue-600');
-
                 radio.addEventListener('change', () => {
                     submitVote(proposal.id, choice);
                 });
-
                 const span = document.createElement('span');
                 span.classList.add('text-sm');
                 span.textContent = choice;
-
                 label.appendChild(radio);
                 label.appendChild(span);
                 voteForm.appendChild(label);
             });
-
             cellVote.appendChild(voteForm);
         }
 
@@ -240,7 +352,9 @@ function renderProposals(proposals) {
             cellStatus.textContent = 'Voting in progress';
         }
 
-        // Stupid? checkbox (only show for president)
+        // NEW: Set Vote Requirement cell
+        cellVoteReq.textContent = proposal.voteRequirement || 'Rel';
+
         if (currentUser && currentUser.role === 'PRESIDENT') {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
@@ -254,17 +368,10 @@ function renderProposals(proposals) {
             cellStupid.innerHTML = proposal.stupid ? 'Yes' : 'No';
         }
 
-        // If PRESIDENT, show "edit"/"remove" actions
         if (currentUser && currentUser.role === 'PRESIDENT') {
             cellActions.innerHTML = `
-                <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs"
-                        data-id="${proposal.id}">
-                    Edit
-                </button>
-                <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs"
-                        data-id="${proposal.id}">
-                    Remove
-                </button>
+                <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Edit</button>
+                <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Remove</button>
             `;
             cellActions.querySelector('.edit-proposal')
                 .addEventListener('click', () => openEditProposalWindow(proposal.id));
@@ -281,13 +388,11 @@ function renderProposals(proposals) {
  */
 function renderPriorityProposals(proposals) {
     priorityProposalsTable.innerHTML = '';
-
     if (!proposals || proposals.length === 0) {
         priorityProposalsSection.classList.add('hidden');
         return;
     }
     priorityProposalsSection.classList.remove('hidden');
-
     proposals.forEach(proposal => {
         const row = priorityProposalsTable.insertRow();
         row.dataset.proposalId = proposal.id;
@@ -297,14 +402,16 @@ function renderPriorityProposals(proposals) {
         const cellParty   = row.insertCell(2);
         const cellVote    = row.insertCell(3);
         const cellStatus  = row.insertCell(4);
-        const cellStupid  = row.insertCell(5);
-        const cellActions = row.insertCell(6);
+        const cellVoteReq = row.insertCell(5); // NEW: Vote Requirement cell
+        const cellStupid  = row.insertCell(6);
+        const cellActions = row.insertCell(7);
 
         cellNumber.classList.add('py-2','px-4','border-b','text-center');
         cellTitle.classList.add('py-2','px-4','border-b','text-center','break-words','whitespace-pre-wrap');
         cellParty.classList.add('py-2','px-4','border-b','text-center');
         cellVote.classList.add('py-2','px-4','border-b','text-center');
         cellStatus.classList.add('py-2','px-4','border-b','text-center');
+        cellVoteReq.classList.add('py-2','px-4','border-b','text-center');
         cellStupid.classList.add('py-2','px-4','border-b','text-center');
         cellActions.classList.add('py-2','px-4','border-b','text-center');
 
@@ -317,14 +424,11 @@ function renderPriorityProposals(proposals) {
         } else {
             const voteChoices = ['For','Against','Abstain'];
             const userVote = proposal.userVote || 'Abstain';
-
             const voteForm = document.createElement('div');
             voteForm.classList.add('flex','justify-center','space-x-4');
-
             voteChoices.forEach(choice => {
                 const label = document.createElement('label');
                 label.classList.add('inline-flex','items-center','space-x-2');
-
                 const radio = document.createElement('input');
                 radio.type = 'radio';
                 radio.name = `vote-${proposal.id}`;
@@ -332,20 +436,16 @@ function renderPriorityProposals(proposals) {
                 radio.checked = (userVote === choice);
                 radio.disabled = proposal.votingEnded;
                 radio.classList.add('form-radio','h-5','w-5','text-blue-600');
-
                 radio.addEventListener('change', () => {
                     submitVote(proposal.id, choice);
                 });
-
                 const span = document.createElement('span');
                 span.classList.add('text-sm');
                 span.textContent = choice;
-
                 label.appendChild(radio);
                 label.appendChild(span);
                 voteForm.appendChild(label);
             });
-
             cellVote.appendChild(voteForm);
         }
 
@@ -357,7 +457,9 @@ function renderPriorityProposals(proposals) {
             cellStatus.textContent = 'Voting in progress (priority)';
         }
 
-        // Stupid? (checkbox) if president
+        // NEW: Set Vote Requirement cell
+        cellVoteReq.textContent = proposal.voteRequirement || 'Rel';
+
         if (currentUser && currentUser.role === 'PRESIDENT') {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
@@ -371,22 +473,13 @@ function renderPriorityProposals(proposals) {
             cellStupid.innerHTML = proposal.stupid ? 'Yes' : 'No';
         }
 
-        // Actions for President
         if (currentUser && currentUser.role === 'PRESIDENT') {
             cellActions.innerHTML = `
-                <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs"
-                        data-id="${proposal.id}">
-                    Edit
-                </button>
-                <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs"
-                        data-id="${proposal.id}">
-                    Remove
-                </button>
+                <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Edit</button>
+                <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Remove</button>
             `;
-            cellActions.querySelector('.edit-proposal')
-                .addEventListener('click', () => openEditProposalWindow(proposal.id));
-            cellActions.querySelector('.remove-proposal')
-                .addEventListener('click', () => removeProposal(proposal.id));
+            cellActions.querySelector('.edit-proposal').addEventListener('click', () => openEditProposalWindow(proposal.id));
+            cellActions.querySelector('.remove-proposal').addEventListener('click', () => removeProposal(proposal.id));
         } else {
             cellActions.innerHTML = '—';
         }
@@ -742,9 +835,11 @@ function controlAssProposal() {
  * Adds a new proposal. No "stupid" field here; that is toggled from the list.
  */
 addProposalButton.addEventListener('click', async () => {
-    const title = newProposalTitle.value; // multiline
+    const title = newProposalTitle.value;
     const party = newProposalParty.value.trim();
-    const priority = newProposalPriority.checked;
+    // Read new category and vote requirement values
+    const category = newProposalCategory.value; // "normal", "priority", or "constitutional"
+    const voteRequirement = newProposalVoteRequirement.value;
     const type = newProposalAssociationType.value.trim();
     const assProposal = newAssociatedProposal.value.trim();
 
@@ -757,14 +852,22 @@ addProposalButton.addEventListener('click', async () => {
         const response = await fetch('/api/proposals', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, party, priority, type, assProposal })
+            body: JSON.stringify({
+                title,
+                party,
+                priority: (category === 'priority'),
+                constitutional: (category === 'constitutional'),
+                type,
+                assProposal,
+                voteRequirement
+            })
         });
-
         if (response.ok) {
             showAlert('Proposal added successfully!', 'success');
             newProposalTitle.value = '';
             newProposalParty.value = '';
-            newProposalPriority.checked = false;
+            newProposalCategory.value = 'normal';
+            newProposalVoteRequirement.value = 'Rel';
             newProposalAssociationType.value = 'normal';
             newAssociatedProposal.value = '';
             newAssociatedProposal.disabled = true;
@@ -775,6 +878,26 @@ addProposalButton.addEventListener('click', async () => {
     } catch (error) {
         console.error('Error adding proposal:', error);
         showAlert('An error occurred while adding the proposal.', 'error');
+    }
+});
+
+endConstitutionalVotingButton.addEventListener('click', async () => {
+    if (!confirm('Are you sure you want to end all constitutional proposal voting?')) return;
+    try {
+        const response = await fetch('/api/proposals/end-voting-constitutional', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        if (response.ok) {
+            showAlert('Constitutional voting ended successfully. Votes counted.', 'success');
+            await fetchProposals();
+        } else {
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error ending constitutional voting:', error);
+        showAlert('An error occurred while ending constitutional voting.', 'error');
     }
 });
 
@@ -1022,25 +1145,29 @@ function initializeWebSocket() {
 // Application Initialization
 // ======================
 function startPolling() {
-  // 1) Poll users & break status
-  setInterval(async () => {
-    try {
-      await fetchUsers();
-      await checkBreakStatus();
-    } catch (error) {
-      console.error("Interval (users/break) error:", error);
-      // This ensures the interval continues even if there's an error
-    }
-  }, 1500);
+  pollUsersAndBreak();
+  pollProposals();
+}
 
-  // 2) Poll proposals
-  setInterval(async () => {
-    try {
-      await fetchProposals();
-    } catch (error) {
-      console.error("Interval (proposals) error:", error);
-    }
-  }, 5000);
+async function pollUsersAndBreak() {
+  try {
+    await fetchUsers();
+    await checkBreakStatus();
+  } catch (error) {
+    console.error("Polling (users/break) error:", error);
+  } finally {
+    setTimeout(pollUsersAndBreak, 1500);
+  }
+}
+
+async function pollProposals() {
+  try {
+    await fetchProposals();
+  } catch (error) {
+    console.error("Polling (proposals) error:", error);
+  } finally {
+    setTimeout(pollProposals, 5000);
+  }
 }
 
 async function initializeApp() {

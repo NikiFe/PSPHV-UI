@@ -131,6 +131,9 @@ public class ParliamentServlet extends HttpServlet {
             case "/proposals/end-voting-priority":
                 handleEndPriorityVoting(request, response);
                 break;
+            case "/proposals/end-voting-constitutional":
+                handleEndVotingConstitutional(request, response);
+                break;
             case "/impose-fine":
                 handleImposeFine(request, response);
                 break;
@@ -663,21 +666,30 @@ public class ParliamentServlet extends HttpServlet {
                     sb.append(line);
                 }
                 JSONObject proposalJson = new JSONObject(sb.toString());
-                String title = proposalJson.getString("title"); // can be multi-line
+                String title = proposalJson.getString("title");
                 String party = proposalJson.optString("party", "President").trim();
-                Boolean priority = proposalJson.optBoolean("priority", false);
+                boolean priority = proposalJson.optBoolean("priority", false);
+                // NEW: Read the constitutional flag and vote requirement
+                boolean constitutional = proposalJson.optBoolean("constitutional", false);
+                String voteRequirement = proposalJson.optString("voteRequirement", "Rel").trim();
                 String type = proposalJson.optString("type", "normal").trim();
-                String associatedProposal = proposalJson.optString("assProposal").trim();
+                String associatedProposal = proposalJson.optString("assProposal", "").trim();
 
-                // "stupid" is not read here because we only toggle it in update
-
-                int nextProposalNumber = getNextProposalNumber(priority);
-
-                String proposalVisual = (priority ? "P" : "")
-                        + nextProposalNumber
-                        + (type.equals("additive") ? " → "
-                        : type.equals("countering") ? " x " : "")
-                        + associatedProposal;
+                int proposalNumber;
+                String proposalVisual;
+                if (constitutional) {
+                    proposalNumber = getNextConstitutionalProposalNumber();
+                    proposalVisual = "C" + proposalNumber;
+                } else if (priority) {
+                    proposalNumber = getNextProposalNumber(true);
+                    proposalVisual = "P" + proposalNumber;
+                } else {
+                    proposalNumber = getNextProposalNumber(false);
+                    proposalVisual = String.valueOf(proposalNumber);
+                }
+                if (!type.equals("normal")) {
+                    proposalVisual += (type.equals("additive") ? " → " : type.equals("countering") ? " x " : "") + associatedProposal;
+                }
 
                 if (title.trim().isEmpty()) {
                     response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal title cannot be empty.");
@@ -688,10 +700,13 @@ public class ParliamentServlet extends HttpServlet {
                 int meetingNumber = getCurrentMeetingNumber();
 
                 Document proposalDoc = new Document("title", title)
-                        .append("proposalNumber", nextProposalNumber)
+                        .append("proposalNumber", proposalNumber)
                         .append("party", party)
                         .append("isPriority", priority)
-                        .append("stupid", false) // default false
+                        // NEW: Add the constitutional flag and vote requirement field
+                        .append("isConstitutional", constitutional)
+                        .append("voteRequirement", voteRequirement)
+                        .append("stupid", false)
                         .append("associationType", type)
                         .append("referencedProposal", associatedProposal)
                         .append("proposalVisual", proposalVisual)
@@ -702,7 +717,7 @@ public class ParliamentServlet extends HttpServlet {
                         .append("votingEnded", false);
                 proposalsCollection.insertOne(proposalDoc);
 
-                Document insertedProposal = proposalsCollection.find(eq("proposalNumber", nextProposalNumber)).first();
+                Document insertedProposal = proposalsCollection.find(Filters.eq("proposalNumber", proposalNumber)).first();
                 if (insertedProposal != null) {
                     JSONObject insertedProposalJson = new JSONObject(insertedProposal.toJson());
                     String id = insertedProposal.getObjectId("_id").toHexString();
@@ -730,6 +745,19 @@ public class ParliamentServlet extends HttpServlet {
         } catch (Exception e) {
             logger.error("Error during adding new proposal: ", e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while adding the proposal.");
+        }
+    }
+
+    private int getNextConstitutionalProposalNumber() {
+        Document lastProposal = proposalsCollection.find(Filters.eq("isConstitutional", true))
+                .sort(Sorts.descending("proposalNumber"))
+                .limit(1)
+                .first();
+        if (lastProposal == null) {
+            return 1;
+        } else {
+            int lastNum = lastProposal.getInteger("proposalNumber", 0);
+            return lastNum + 1;
         }
     }
 
@@ -805,11 +833,11 @@ public class ParliamentServlet extends HttpServlet {
         try {
             HttpSession session = request.getSession(false);
             if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
-                // Exclude proposals that are "votingEnded=true" or "stupid=true"
                 List<Document> proposals = proposalsCollection.find(
                         Filters.and(
                                 Filters.eq("votingEnded", false),
                                 Filters.eq("isPriority", false),
+                                Filters.eq("isConstitutional", false),
                                 Filters.eq("stupid", false)
                         )
                 ).into(new ArrayList<>());
@@ -817,14 +845,13 @@ public class ParliamentServlet extends HttpServlet {
                 if (proposals.isEmpty()) {
                     response.setStatus(HttpServletResponse.SC_OK);
                     JSONObject resp = new JSONObject();
-                    resp.put("message", "No normal proposals to end. Possibly only priority or stupid proposals remain.");
+                    resp.put("message", "No normal proposals to end. Possibly only priority, constitutional, or stupid proposals remain.");
                     response.setContentType("application/json");
                     response.getWriter().write(resp.toString());
                     return;
                 }
 
                 Map<String, Integer> adjustedMap = computeAdjustedElectoralStrengths();
-
                 for (Document proposal : proposals) {
                     endProposalVoting(proposal, adjustedMap);
                 }
@@ -893,14 +920,52 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
+    private void handleEndVotingConstitutional(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            HttpSession session = request.getSession(false);
+            if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
+                List<Document> proposals = proposalsCollection.find(
+                        Filters.and(
+                                Filters.eq("votingEnded", false),
+                                Filters.eq("isConstitutional", true),
+                                Filters.eq("stupid", false)
+                        )
+                ).into(new ArrayList<>());
+                if (proposals.isEmpty()) {
+                    response.setStatus(HttpServletResponse.SC_OK);
+                    JSONObject resp = new JSONObject();
+                    resp.put("message", "No constitutional proposals to end, or they might be marked stupid.");
+                    response.setContentType("application/json");
+                    response.getWriter().write(resp.toString());
+                    return;
+                }
+
+                Map<String, Integer> adjustedMap = computeAdjustedElectoralStrengths();
+                for (Document proposal : proposals) {
+                    endProposalVoting(proposal, adjustedMap);
+                }
+
+                response.setStatus(HttpServletResponse.SC_OK);
+                JSONObject resp = new JSONObject();
+                resp.put("message", "Constitutional voting ended. Votes counted.");
+                response.setContentType("application/json");
+                response.getWriter().write(resp.toString());
+                logger.info("President ended constitutional proposals' voting.");
+            } else {
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can end constitutional voting.");
+            }
+        } catch (Exception e) {
+            logger.error("Error during ending constitutional voting: ", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while ending constitutional voting.");
+        }
+    }
+
     private void endProposalVoting(Document proposal, Map<String, Integer> adjustedMap) {
         ObjectId proposalId = proposal.getObjectId("_id");
-        List<Document> votes = votesCollection.find(eq("proposalId", proposalId)).into(new ArrayList<>());
-
+        List<Document> votes = votesCollection.find(Filters.eq("proposalId", proposalId)).into(new ArrayList<>());
         int totalFor = 0;
         int totalAgainst = 0;
         int supportersCount = 0;
-
         JSONArray detailedVotes = new JSONArray();
 
         for (Document vote : votes) {
@@ -909,7 +974,6 @@ public class ParliamentServlet extends HttpServlet {
             String username = vote.getString("username");
             int voterAdjustedStrength = adjustedMap.getOrDefault(voterId, 0);
             Date timestamp = vote.getDate("timestamp");
-
             JSONObject detailedVote = new JSONObject();
             detailedVote.put("userId", voterId);
             detailedVote.put("username", username);
@@ -918,7 +982,6 @@ public class ParliamentServlet extends HttpServlet {
             if (timestamp != null) {
                 detailedVote.put("timestamp", timestamp.toInstant().toString());
             }
-
             detailedVotes.put(detailedVote);
 
             if ("For".equalsIgnoreCase(voteChoice)) {
@@ -930,12 +993,29 @@ public class ParliamentServlet extends HttpServlet {
         }
 
         boolean passed = false;
-        if (supportersCount >= 2 && totalFor > totalAgainst) {
-            passed = true;
+        String voteRequirement = proposal.getString("voteRequirement");
+        if (voteRequirement == null) {
+            voteRequirement = "Rel";
+        }
+        if ("Rel".equals(voteRequirement)) {
+            // Rel: More For than Against and at least 2 For votes
+            passed = (supportersCount >= 2 && totalFor > totalAgainst);
+        } else {
+            double ratio = 0.0;
+            boolean useTotal = voteRequirement.endsWith("+");
+            if (voteRequirement.startsWith("2/3")) {
+                ratio = 2.0 / 3.0;
+            } else if (voteRequirement.startsWith("3/5")) {
+                ratio = 3.0 / 5.0;
+            } else if (voteRequirement.startsWith("1/2")) {
+                ratio = 1.0 / 2.0;
+            }
+            double denominator = useTotal ? getTotalElectoralStrength() : getTotalPresentElectoralStrength(adjustedMap);
+            passed = (totalFor > ratio * denominator);
         }
 
         proposalsCollection.updateOne(
-                eq("_id", proposalId),
+                Filters.eq("_id", proposalId),
                 new Document("$set", new Document("passed", passed)
                         .append("totalFor", totalFor)
                         .append("totalAgainst", totalAgainst)
@@ -947,11 +1027,26 @@ public class ParliamentServlet extends HttpServlet {
                 .append("meetingNumber", proposal.getInteger("meetingNumber", 1))
                 .append("votes", detailedVotes.toList())
                 .append("timestamp", new Date());
-
         votingLogsCollection.insertOne(votingLog);
-
         logger.info("Proposal '{}': For = {}, Against = {}, Passed = {}",
                 proposal.getString("title"), totalFor, totalAgainst, passed);
+    }
+
+    private int getTotalElectoralStrength() {
+        List<Document> allUsers = usersCollection.find().into(new ArrayList<>());
+        int sum = 0;
+        for (Document u : allUsers) {
+            sum += u.getInteger("electoralStrength", 0);
+        }
+        return sum;
+    }
+
+    private int getTotalPresentElectoralStrength(Map<String, Integer> adjustedMap) {
+        int sum = 0;
+        for (Integer strength : adjustedMap.values()) {
+            sum += strength;
+        }
+        return sum;
     }
 
     private Map<String, Integer> computeAdjustedElectoralStrengths() {
