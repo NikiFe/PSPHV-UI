@@ -10,7 +10,8 @@ import org.slf4j.LoggerFactory;
 public class MongoDBConnection {
     private static final Logger logger = LoggerFactory.getLogger(MongoDBConnection.class);
 
-    private static final String CONNECTION_STRING = "mongodb://localhost:27017"; // Update as needed
+    // private static final String CONNECTION_STRING = "mongodb://localhost:27017"; // Update as needed
+    private static String CONNECTION_STRING;
     private static final String DATABASE_NAME = "parliament";
 
     private static MongoClient mongoClient = null;
@@ -20,6 +21,11 @@ public class MongoDBConnection {
     public static synchronized MongoDatabase getDatabase() {
         if (mongoClient == null) {
             try {
+                CONNECTION_STRING = System.getenv("MONGODB_URI");
+                if (CONNECTION_STRING == null || CONNECTION_STRING.isEmpty()) {
+                    logger.warn("MONGODB_URI environment variable not set. Using default connection string.");
+                    CONNECTION_STRING = "mongodb://localhost:27017";
+                }
                 mongoClient = MongoClients.create(CONNECTION_STRING);
                 database = mongoClient.getDatabase(DATABASE_NAME);
                 logger.info("Connected to MongoDB at '{}', database '{}'.", CONNECTION_STRING, DATABASE_NAME);
@@ -45,6 +51,7 @@ public class MongoDBConnection {
     }
 
     // Close the MongoDB connection
+    // TODO: Implement a ServletContextListener to call this method on application shutdown.
     public static synchronized void closeConnection() {
         if (mongoClient != null) {
             mongoClient.close();

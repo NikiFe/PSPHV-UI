@@ -61,9 +61,6 @@
                 Register
             </button>
         </form>
-        <div id="alert" class="mt-4 hidden">
-            <p id="alert-message" class="text-center text-sm"></p>
-        </div>
     </div>
 </div>
 
@@ -80,6 +77,11 @@
             </button>
         </div>
     </header>
+
+    <!-- Alert Div Moved Here (Initially Hidden) -->
+    <div id="alert" class="m-4 hidden fixed top-5 right-5 z-50 max-w-md">
+        <p id="alert-message" class="text-center text-sm"></p>
+    </div>
 
     <main class="p-4">
         <!-- Seat Layout -->
@@ -100,7 +102,7 @@
                         <th class="py-2 px-4 border-b text-center">Your Vote</th>
                         <th class="py-2 px-4 border-b text-center">Status</th>
                         <th class="py-2 px-4 border-b text-center">Vote Requirement</th>
-                        <th class="py-2 px-4 border-b text-center">Stupid?</th>
+                        <th id="constitutional-stupid-header" class="py-2 px-4 border-b text-center">Stupid?</th>
                         <th class="py-2 px-4 border-b text-center">Actions</th>
                     </tr>
                     </thead>
@@ -136,7 +138,7 @@
         </div>
 
         <!-- Normal Proposals Section -->
-        <div class="mb-6">
+        <div id="proposals-section" class="mb-6">
             <h2 class="text-2xl font-bold mb-4 text-center main-title">Proposals</h2>
             <div class="overflow-x-auto">
                 <table class="min-w-full bg-gray-700 rounded-md">
@@ -189,7 +191,7 @@
                         <option value="1/2">1/2</option>
                     </select>
 
-                    <select id="new-proposal-association-type" onchange="controlAssProposal()" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
+                    <select id="new-proposal-association-type" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-blue-500">
                         <option value="normal">Normal</option>
                         <option value="additive">Additive</option>
                         <option value="countering">Countering</option>
@@ -204,10 +206,10 @@
                 <!-- Impose Fine -->
                 <div>
                     <h3 class="font-semibold mb-1 main-title">Impose Fine</h3>
-                    <input type="text" id="fine-username" placeholder="Username" class="w-full px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-red-500">
-                    <input type="number" id="fine-amount" placeholder="Amount" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-red-500">
-                    <input type="text" id="fine-reason" placeholder="Reason for Fine" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-red-500">
-                    <button id="impose-fine" class="mt-2 bg-red-600 hover:bg-red-700 text-white py-1 px-3 rounded font-semibold">
+                    <input type="text" id="fine-username" placeholder="Username to Fine" class="w-full mt-1 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-orange-500">
+                    <input type="number" id="fine-amount" placeholder="Fine Amount" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-orange-500">
+                    <textarea id="fine-reason" placeholder="Reason for fine..." rows="2" class="w-full mt-2 px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 focus:outline-none focus:ring focus:border-orange-500"></textarea>
+                    <button id="impose-fine" class="mt-2 bg-orange-500 hover:bg-orange-600 text-white py-1 px-3 rounded font-semibold">
                         Impose Fine
                     </button>
                 </div>

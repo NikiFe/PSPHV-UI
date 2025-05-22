@@ -5,6 +5,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.eclipse.jetty.websocket.api.Session;
 import org.eclipse.jetty.websocket.api.annotations.*;
+import org.eclipse.jetty.websocket.api.StatusCode;
+import org.eclipse.jetty.websocket.servlet.ServletUpgradeRequest;
 
 import java.util.concurrent.CopyOnWriteArraySet;
 
@@ -15,10 +17,26 @@ public class SeatWebSocket {
     // Thread-safe set to store all active WebSocket sessions
     private static final CopyOnWriteArraySet<Session> sessions = new CopyOnWriteArraySet<>();
 
+    private final boolean authenticated;
+
+    // Constructor to accept authentication status
+    public SeatWebSocket(boolean isAuthenticated) {
+        this.authenticated = isAuthenticated;
+    }
+
     @OnWebSocketConnect
     public void onConnect(Session session) throws Exception {
-        sessions.add(session);
-        logger.info("WebSocket Connected: {}", session.getRemoteAddress().getAddress());
+        // No longer need to get attributes here, use the member variable
+        // ServletUpgradeRequest servletUpgradeRequest = (ServletUpgradeRequest) session.getUpgradeRequest();
+        // Boolean isAuthenticated = (Boolean) servletUpgradeRequest.getHttpServletRequest().getAttribute("isAuthenticated");
+
+        if (this.authenticated) {
+            sessions.add(session);
+            logger.info("WebSocket Connected (Authenticated): {}", session.getRemoteAddress().getAddress());
+        } else {
+            logger.warn("WebSocket Connection Attempt Rejected (Unauthenticated): {}", session.getRemoteAddress().getAddress());
+            session.close(StatusCode.POLICY_VIOLATION, "User not authenticated");
+        }
     }
 
     @OnWebSocketClose
@@ -30,7 +48,15 @@ public class SeatWebSocket {
     @OnWebSocketMessage
     public void onMessage(Session session, String message) {
         logger.info("Received message from {}: {}", session.getRemoteAddress().getAddress(), message);
-        // Handle incoming messages if needed
+        // Echo logic removed
+        // Handle incoming messages if needed (original comment)
+        // For example, if clients could send specific commands:
+        // try {
+        //     JSONObject clientMessage = new JSONObject(message);
+        //     // process clientMessage
+        // } catch (org.json.JSONException e) {
+        //     logger.warn("Received non-JSON message or malformed JSON from client: {}", message);
+        // }
     }
 
     @OnWebSocketError

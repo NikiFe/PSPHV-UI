@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <properties>
-        <jetty.version>9.4.56.v20240826</jetty.version>
+        <jetty.version>9.4.57.v20241219</jetty.version>
         <java.version>11</java.version>
     </properties>
 
@@ -36,6 +36,13 @@
             <version>${jetty.version}</version>
         </dependency>
 
+        <!-- Jetty Servlets (Added for org.eclipse.jetty.servlets package) -->
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-servlets</artifactId>
+            <version>${jetty.version}</version>
+        </dependency>
+
         <!-- MongoDB Driver -->
         <dependency>
             <groupId>org.mongodb</groupId>
@@ -47,7 +54,7 @@
         <dependency>
             <groupId>org.json</groupId>
             <artifactId>json</artifactId>
-            <version>20230618</version>
+            <version>20231013</version>
         </dependency>
 
         <!-- BCrypt for Password Hashing -->
@@ -77,20 +84,6 @@
             <artifactId>javax.servlet-api</artifactId>
             <version>3.1.0</version>
             <!-- <scope>provided</scope> --> <!-- Removed -->
-        </dependency>
-
-        <!-- SLF4J API -->
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>1.7.36</version>
-        </dependency>
-
-        <!-- SLF4J Simple Binding (for simplicity) -->
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
-            <version>1.7.36</version>
         </dependency>
     </dependencies>
 

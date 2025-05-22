@@ -60,35 +60,77 @@ const endBreakButton = document.getElementById('end-break');
 // ======================
 let currentUser = null; // { username: '', role: '', id: '' }
 let ws = null; // WebSocket connection
+let csrfToken = null; // Variable to store the CSRF token
 
 // ======================
 // Utility Functions
 // ======================
 
-function showAlert(message, type = 'success') {
-    alertMessage.innerText = message;
-    alertContainer.className = '';
+function getHeadersWithCsrf(additionalHeaders = {}) {
+    const headers = {
+        'Content-Type': 'application/json',
+        ...additionalHeaders
+    };
+    if (csrfToken) {
+        headers['X-CSRF-TOKEN'] = csrfToken;
+    }
+    return headers;
+}
 
-    if (type === 'success') {
-        alertContainer.classList.add(
-            'block','px-4','py-3','rounded','shadow-lg','mb-4',
-            'bg-green-100','border','border-green-400','text-green-700'
-        );
-    } else if (type === 'error') {
-        alertContainer.classList.add(
-            'block','px-4','py-3','rounded','shadow-lg','mb-4',
-            'bg-red-100','border','border-red-400','text-red-700'
-        );
-    } else if (type === 'warning') {
-        alertContainer.classList.add(
-            'block','px-4','py-3','rounded','shadow-lg','mb-4',
-            'bg-yellow-100','border','border-yellow-400','text-yellow-700'
-        );
+function showAlert(message, type = 'success') {
+    // Use specific alert elements from index.html
+    const container = document.getElementById('alert'); 
+    const messageElement = document.getElementById('alert-message');
+
+    console.log(`showAlert called. Message: "${message}", Type: ${type}`); // Log entry
+    console.log("Target container:", container);
+    console.log("Target message element:", messageElement);
+
+    if (!container || !messageElement) {
+        console.error("Alert container (#alert) or message element (#alert-message) not found in DOM!");
+        return; 
     }
 
-    setTimeout(() => {
-        alertContainer.classList.add('hidden');
+    messageElement.innerText = message;
+
+    // Define classes for each type
+    const baseClasses = ['block', 'px-4', 'py-3', 'rounded', 'shadow-lg', 'mb-4'];
+    const successClasses = ['bg-green-100', 'border', 'border-green-400', 'text-green-700'];
+    const errorClasses = ['bg-red-100', 'border', 'border-red-400', 'text-red-700'];
+    const warningClasses = ['bg-yellow-100', 'border', 'border-yellow-400', 'text-yellow-700'];
+    const allTypeClasses = [...successClasses, ...errorClasses, ...warningClasses];
+
+    // Log current classes before modification
+    console.log("Alert container classes BEFORE:", container.className);
+
+    // Remove previous type classes and hidden
+    container.classList.remove('hidden', ...allTypeClasses);
+    
+    // Add base classes and current type classes
+    container.classList.add(...baseClasses);
+    if (type === 'success') {
+        container.classList.add(...successClasses);
+    } else if (type === 'error') {
+        container.classList.add(...errorClasses);
+    } else if (type === 'warning') {
+        container.classList.add(...warningClasses);
+    }
+    
+    // Log current classes AFTER modification
+    console.log("Alert container classes AFTER:", container.className);
+
+    // Set timeout to hide again
+    // Clear any existing timeout to prevent premature hiding if called rapidly
+    if (container.dataset.hideTimeout) {
+        clearTimeout(parseInt(container.dataset.hideTimeout));
+    }
+    const timeoutId = setTimeout(() => {
+        container.classList.add('hidden');
+        // Optionally remove type classes when hiding too
+        container.classList.remove(...allTypeClasses, ...baseClasses);
+        delete container.dataset.hideTimeout;
     }, 5000);
+    container.dataset.hideTimeout = timeoutId.toString();
 }
 
 function switchTab(activeTab) {
@@ -115,75 +157,111 @@ function switchTab(activeTab) {
 
 async function fetchUserInfo() {
     try {
-        const response = await fetch('/api/user-info');
+        const response = await fetch('/api/user-info', {
+            method: 'GET',
+            headers: getHeadersWithCsrf(), // Send existing token if any (harmless for GET)
+            credentials: 'include'
+        });
         if (response.ok) {
-            const user = await response.json();
+            const userInfo = await response.json();
+            // Store CSRF token received from server (X-CSRF-TOKEN is the key we added)
+            if (userInfo['X-CSRF-TOKEN']) {
+                csrfToken = userInfo['X-CSRF-TOKEN'];
+                // console.log("CSRF token set/refreshed from user-info");
+            } else {
+                 console.warn("CSRF token missing in /api/user-info response.");
+                 // Don't null out existing csrfToken if response is missing it
+            }
+            
+            // Remove token from user object before storing globally
+            const user = { ...userInfo }; 
+            delete user['X-CSRF-TOKEN']; 
+
             currentUser = user;
             return user;
         } else {
             console.error('Failed to fetch user info');
+            currentUser = null; // Ensure currentUser is null on failure
+            csrfToken = null;  // Clear CSRF token if user info fails (session likely invalid)
             return null;
         }
     } catch (error) {
         console.error('Error fetching user info:', error);
+        currentUser = null; // Ensure currentUser is null on error
+        csrfToken = null;  // Clear CSRF token on error
         return null;
     }
 }
 
 function renderConstitutionalProposals(proposals) {
-    constitutionalProposalsTable.innerHTML = '';
-    if (!proposals || proposals.length === 0) {
-        constitutionalProposalsSection.classList.add('hidden');
+    const tableBody = document.getElementById('constitutional-proposals-table-body');
+    const section = document.getElementById('constitutional-proposals-section');
+
+    if (!tableBody) {
+        console.error("Constitutional proposals table body not found!");
+        if (section) section.classList.add('hidden');
         return;
     }
-    constitutionalProposalsSection.classList.remove('hidden');
+    tableBody.replaceChildren(); // Clear existing rows
+
+    if (!proposals || proposals.length === 0) {
+        if (section) section.classList.add('hidden');
+        return;
+    }
+    if (section) section.classList.remove('hidden');
+
     proposals.forEach(proposal => {
-        const row = constitutionalProposalsTable.insertRow();
+        const row = tableBody.insertRow();
         row.dataset.proposalId = proposal.id;
+
+        // Apply Tailwind classes for consistent styling (Copied from Priority)
+        const cellClasses = ['py-2', 'px-4', 'border-b', 'border-gray-600', 'text-center'];
+        const titleCellClasses = [...cellClasses, 'break-words', 'whitespace-pre-wrap'];
 
         const cellNumber  = row.insertCell(0);
         const cellTitle   = row.insertCell(1);
         const cellParty   = row.insertCell(2);
         const cellVote    = row.insertCell(3);
         const cellStatus  = row.insertCell(4);
-        const cellVoteReq = row.insertCell(5); // NEW: Vote Requirement cell
+        const cellVoteReq = row.insertCell(5);
         const cellStupid  = row.insertCell(6);
         const cellActions = row.insertCell(7);
 
-        cellNumber.classList.add('py-2','px-4','border-b','text-center');
-        cellTitle.classList.add('py-2','px-4','border-b','text-center','break-words','whitespace-pre-wrap');
-        cellParty.classList.add('py-2','px-4','border-b','text-center');
-        cellVote.classList.add('py-2','px-4','border-b','text-center');
-        cellStatus.classList.add('py-2','px-4','border-b','text-center');
-        cellVoteReq.classList.add('py-2','px-4','border-b','text-center');
-        cellStupid.classList.add('py-2','px-4','border-b','text-center');
-        cellActions.classList.add('py-2','px-4','border-b','text-center');
+        // Apply consistent classes
+        cellNumber.classList.add(...cellClasses);
+        cellTitle.classList.add(...titleCellClasses);
+        cellParty.classList.add(...cellClasses);
+        cellVote.classList.add(...cellClasses);
+        cellStatus.classList.add(...cellClasses);
+        cellVoteReq.classList.add(...cellClasses);
+        cellStupid.classList.add(...cellClasses);
+        cellActions.classList.add(...cellClasses);
 
         cellNumber.textContent = proposal.proposalVisual || '';
         cellTitle.textContent = proposal.title || '';
         cellParty.textContent = proposal.party || '';
+        cellVoteReq.textContent = proposal.voteRequirement || 'Rel';
 
+        cellVote.replaceChildren();
         if (proposal.stupid) {
-            cellVote.innerHTML = '(Stupid, no voting)';
+            cellVote.textContent = '(Stupid, no voting)';
         } else {
-            // (Render voting radio buttons as before)
-            const voteChoices = ['For','Against','Abstain'];
+            const voteChoices = ['For', 'Against', 'Abstain'];
             const userVote = proposal.userVote || 'Abstain';
             const voteForm = document.createElement('div');
-            voteForm.classList.add('flex','justify-center','space-x-4');
+            voteForm.classList.add('flex', 'justify-center', 'space-x-4');
             voteChoices.forEach(choice => {
                 const label = document.createElement('label');
-                label.classList.add('inline-flex','items-center','space-x-2');
+                label.classList.add('inline-flex', 'items-center', 'space-x-2');
                 const radio = document.createElement('input');
                 radio.type = 'radio';
-                radio.name = `vote-${proposal.id}`;
+                radio.name = `vote-constitutional-${proposal.id}`; // Unique name
                 radio.value = choice;
                 radio.checked = (userVote === choice);
                 radio.disabled = proposal.votingEnded;
-                radio.classList.add('form-radio','h-5','w-5','text-blue-600');
-                radio.addEventListener('change', () => {
-                    submitVote(proposal.id, choice);
-                });
+                // Match Priority styling for radio
+                radio.classList.add('form-radio', 'h-4', 'w-4', 'sm:h-5', 'sm:w-5', 'text-blue-500', 'bg-gray-700', 'border-gray-500', 'focus:ring-blue-500'); 
+                radio.addEventListener('change', () => submitVote(proposal.id, choice));
                 const span = document.createElement('span');
                 span.classList.add('text-sm');
                 span.textContent = choice;
@@ -194,43 +272,51 @@ function renderConstitutionalProposals(proposals) {
             cellVote.appendChild(voteForm);
         }
 
+        cellStatus.replaceChildren();
         if (proposal.votingEnded) {
             const statusText = proposal.passed ? 'Passed' : 'Failed';
             const statusDetail = `For: ${proposal.totalFor}, Against: ${proposal.totalAgainst}`;
-            cellStatus.innerHTML = `<strong>${statusText}</strong><br>${statusDetail}`;
+            const strongElement = document.createElement('strong');
+            strongElement.textContent = statusText;
+            strongElement.classList.add(proposal.passed ? 'text-green-400' : 'text-red-400'); // Match Priority
+            cellStatus.appendChild(strongElement);
+            cellStatus.appendChild(document.createElement('br'));
+            cellStatus.appendChild(document.createTextNode(statusDetail));
         } else {
             cellStatus.textContent = 'Voting in progress (constitutional)';
         }
 
-        // NEW: Set Vote Requirement cell
-        cellVoteReq.textContent = proposal.voteRequirement || 'Rel';
-
+        cellStupid.replaceChildren();
         if (currentUser && currentUser.role === 'PRESIDENT') {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.checked = proposal.stupid === true;
-            checkbox.classList.add('form-checkbox','h-5','w-5','text-blue-600');
-            checkbox.addEventListener('change', () => {
-                toggleStupidProposal(proposal.id, checkbox.checked);
-            });
+            // Apply consistent styling matching other tables
+            checkbox.classList.add('form-checkbox', 'h-5', 'w-5', 'text-blue-600', 'rounded', 'bg-gray-700', 'border-gray-500', 'focus:ring-blue-500');
+            checkbox.addEventListener('change', () => toggleStupidProposal(proposal.id, checkbox.checked));
             cellStupid.appendChild(checkbox);
         } else {
-            cellStupid.innerHTML = proposal.stupid ? 'Yes' : 'No';
+            cellStupid.textContent = proposal.stupid ? 'Yes' : 'No';
         }
 
+        cellActions.replaceChildren();
         if (currentUser && currentUser.role === 'PRESIDENT') {
-            cellActions.innerHTML = `
-                <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Edit</button>
-                <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Remove</button>
-            `;
-            cellActions.querySelector('.edit-proposal').addEventListener('click', () => {
-                openEditProposalWindow(proposal.id);
-            });
-            cellActions.querySelector('.remove-proposal').addEventListener('click', () => {
-                removeProposal(proposal.id);
-            });
+            const editButton = document.createElement('button');
+            editButton.classList.add('edit-proposal', 'bg-blue-500', 'hover:bg-blue-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+            editButton.dataset.id = proposal.id;
+            editButton.textContent = 'Edit';
+            editButton.addEventListener('click', () => openEditProposalWindow(proposal.id));
+
+            const removeButton = document.createElement('button');
+            removeButton.classList.add('remove-proposal', 'bg-red-500', 'hover:bg-red-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs', 'ml-1');
+            removeButton.dataset.id = proposal.id;
+            removeButton.textContent = 'Remove';
+            removeButton.addEventListener('click', () => removeProposal(proposal.id));
+
+            cellActions.appendChild(editButton);
+            cellActions.appendChild(removeButton);
         } else {
-            cellActions.innerHTML = '—';
+            cellActions.textContent = '—';
         }
     });
 }
@@ -265,7 +351,7 @@ async function toggleStupidProposal(proposalId, isStupid) {
     try {
         const response = await fetch(`/api/proposals/${proposalId}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeadersWithCsrf(),
             body: JSON.stringify({ stupid: isStupid })
         });
 
@@ -286,57 +372,67 @@ async function toggleStupidProposal(proposalId, isStupid) {
  * Renders the normal (non-priority) proposals.
  */
 function renderProposals(proposals) {
-    proposalsTable.innerHTML = '';
+    if (proposalsTable) proposalsTable.replaceChildren(); // Clear with replaceChildren
+    else return; // proposalsTable is not found
+
     proposals.forEach(proposal => {
         const row = proposalsTable.insertRow();
         row.dataset.proposalId = proposal.id;
 
-        // 8 columns: new cell for Vote Requirement inserted after Status
+        // Apply Tailwind classes for consistent styling (Copied from Priority)
+        const cellClasses = ['py-2', 'px-4', 'border-b', 'border-gray-600', 'text-center'];
+        const titleCellClasses = [...cellClasses, 'break-words', 'whitespace-pre-wrap'];
+
         const cellNumber  = row.insertCell(0);
         const cellTitle   = row.insertCell(1);
         const cellParty   = row.insertCell(2);
         const cellVote    = row.insertCell(3);
         const cellStatus  = row.insertCell(4);
-        const cellVoteReq = row.insertCell(5); // NEW: Vote Requirement
+        const cellVoteReq = row.insertCell(5);
         const cellStupid  = row.insertCell(6);
         const cellActions = row.insertCell(7);
 
-        cellNumber.classList.add('py-2','px-4','border-b','text-center');
-        cellTitle.classList.add('py-2','px-4','border-b','text-center','break-words','whitespace-pre-wrap');
-        cellParty.classList.add('py-2','px-4','border-b','text-center');
-        cellVote.classList.add('py-2','px-4','border-b','text-center');
-        cellStatus.classList.add('py-2','px-4','border-b','text-center');
-        cellVoteReq.classList.add('py-2','px-4','border-b','text-center');
-        cellStupid.classList.add('py-2','px-4','border-b','text-center');
-        cellActions.classList.add('py-2','px-4','border-b','text-center');
+        // Apply consistent classes
+        cellNumber.classList.add(...cellClasses);
+        cellTitle.classList.add(...titleCellClasses);
+        cellParty.classList.add(...cellClasses);
+        cellVote.classList.add(...cellClasses);
+        cellStatus.classList.add(...cellClasses);
+        cellVoteReq.classList.add(...cellClasses);
+        cellStupid.classList.add(...cellClasses);
+        cellActions.classList.add(...cellClasses);
 
         cellNumber.textContent = proposal.proposalVisual || '';
         cellTitle.textContent = proposal.title || '';
         cellParty.textContent = proposal.party || '';
+        cellVoteReq.textContent = proposal.voteRequirement || 'Rel';
 
+        cellVote.replaceChildren(); // Clear cell
         if (proposal.stupid) {
-            cellVote.innerHTML = '(Stupid, no voting)';
+            cellVote.textContent = '(Stupid, no voting)';
         } else {
-            const voteChoices = ['For','Against','Abstain'];
+            const voteChoices = ['For', 'Against', 'Abstain'];
             const userVote = proposal.userVote || 'Abstain';
             const voteForm = document.createElement('div');
-            voteForm.classList.add('flex','justify-center','space-x-4');
+            voteForm.classList.add('flex', 'justify-center', 'space-x-4');
             voteChoices.forEach(choice => {
                 const label = document.createElement('label');
-                label.classList.add('inline-flex','items-center','space-x-2');
+                label.classList.add('inline-flex', 'items-center', 'space-x-1', 'sm:space-x-2', 'cursor-pointer'); // Match Priority
+
                 const radio = document.createElement('input');
                 radio.type = 'radio';
                 radio.name = `vote-${proposal.id}`;
                 radio.value = choice;
                 radio.checked = (userVote === choice);
                 radio.disabled = proposal.votingEnded;
-                radio.classList.add('form-radio','h-5','w-5','text-blue-600');
-                radio.addEventListener('change', () => {
-                    submitVote(proposal.id, choice);
-                });
+                 // Match Priority styling for radio
+                radio.classList.add('form-radio', 'h-4', 'w-4', 'sm:h-5', 'sm:w-5', 'text-blue-500', 'bg-gray-700', 'border-gray-500', 'focus:ring-blue-500');
+                radio.addEventListener('change', () => submitVote(proposal.id, choice));
+                
                 const span = document.createElement('span');
-                span.classList.add('text-sm');
+                span.classList.add('text-xs', 'sm:text-sm'); // Match Priority
                 span.textContent = choice;
+
                 label.appendChild(radio);
                 label.appendChild(span);
                 voteForm.appendChild(label);
@@ -344,41 +440,51 @@ function renderProposals(proposals) {
             cellVote.appendChild(voteForm);
         }
 
+        cellStatus.replaceChildren(); // Clear cell
         if (proposal.votingEnded) {
             const statusText = proposal.passed ? 'Passed' : 'Failed';
             const statusDetail = `For: ${proposal.totalFor}, Against: ${proposal.totalAgainst}`;
-            cellStatus.innerHTML = `<strong>${statusText}</strong><br>${statusDetail}`;
+            const strongElement = document.createElement('strong');
+            strongElement.textContent = statusText;
+            strongElement.classList.add(proposal.passed ? 'text-green-400' : 'text-red-400'); // Match Priority
+            cellStatus.appendChild(strongElement);
+            cellStatus.appendChild(document.createElement('br'));
+            cellStatus.appendChild(document.createTextNode(statusDetail));
         } else {
             cellStatus.textContent = 'Voting in progress';
         }
 
-        // NEW: Set Vote Requirement cell
-        cellVoteReq.textContent = proposal.voteRequirement || 'Rel';
-
+        cellStupid.replaceChildren(); // Clear cell
         if (currentUser && currentUser.role === 'PRESIDENT') {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.checked = proposal.stupid === true;
-            checkbox.classList.add('form-checkbox','h-5','w-5','text-blue-600');
-            checkbox.addEventListener('change', () => {
-                toggleStupidProposal(proposal.id, checkbox.checked);
-            });
+            // Apply consistent styling matching other tables
+            checkbox.classList.add('form-checkbox', 'h-5', 'w-5', 'text-blue-600', 'rounded', 'bg-gray-700', 'border-gray-500', 'focus:ring-blue-500');
+            checkbox.addEventListener('change', () => toggleStupidProposal(proposal.id, checkbox.checked));
             cellStupid.appendChild(checkbox);
         } else {
-            cellStupid.innerHTML = proposal.stupid ? 'Yes' : 'No';
+            cellStupid.textContent = proposal.stupid ? 'Yes' : 'No';
         }
 
+        cellActions.replaceChildren(); // Clear cell
         if (currentUser && currentUser.role === 'PRESIDENT') {
-            cellActions.innerHTML = `
-                <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Edit</button>
-                <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Remove</button>
-            `;
-            cellActions.querySelector('.edit-proposal')
-                .addEventListener('click', () => openEditProposalWindow(proposal.id));
-            cellActions.querySelector('.remove-proposal')
-                .addEventListener('click', () => removeProposal(proposal.id));
+            const editButton = document.createElement('button');
+            editButton.classList.add('edit-proposal', 'bg-blue-500', 'hover:bg-blue-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+            editButton.dataset.id = proposal.id;
+            editButton.textContent = 'Edit';
+            editButton.addEventListener('click', () => openEditProposalWindow(proposal.id));
+
+            const removeButton = document.createElement('button');
+            removeButton.classList.add('remove-proposal', 'bg-red-500', 'hover:bg-red-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs', 'ml-1');
+            removeButton.dataset.id = proposal.id;
+            removeButton.textContent = 'Remove';
+            removeButton.addEventListener('click', () => removeProposal(proposal.id));
+
+            cellActions.appendChild(editButton);
+            cellActions.appendChild(removeButton);
         } else {
-            cellActions.innerHTML = '—';
+            cellActions.textContent = '—';
         }
     });
 }
@@ -387,61 +493,101 @@ function renderProposals(proposals) {
  * Renders the priority proposals in their separate table.
  */
 function renderPriorityProposals(proposals) {
-    priorityProposalsTable.innerHTML = '';
-    if (!proposals || proposals.length === 0) {
-        priorityProposalsSection.classList.add('hidden');
+    const section = document.getElementById('priority-proposals-section');
+
+    if (!section) {
+        console.error("renderPriorityProposals: CRITICAL - Priority proposals SECTION ('priority-proposals-section') not found in DOM!");
+        return; // Can't do anything if the whole section is missing
+    }
+
+    // Attempt to find the tbody using its ID directly
+    const tableBody = document.getElementById('priority-proposals-table-body');
+
+    if (!tableBody) {
+        console.error("renderPriorityProposals: Priority proposals TABLE BODY ('priority-proposals-table-body') not found in DOM.");
+        // Log details about the section to see if its tbody is missing or the section is malformed
+        if (section) { // Check section again, just in case it vanished between the two getElementById calls (highly unlikely)
+            console.log("renderPriorityProposals: outerHTML of 'priority-proposals-section' (up to 500 chars):", section.outerHTML.substring(0, 500));
+        }
+        section.classList.add('hidden'); // Hide the section as we can't populate its body
         return;
     }
-    priorityProposalsSection.classList.remove('hidden');
+
+    // Sanity check: Ensure the found tableBody is a child of the section. 
+    // This helps detect if getElementById picked up an orphaned element or one from an unexpected part of the DOM.
+    if (!section.contains(tableBody)) {
+         console.warn("renderPriorityProposals: 'priority-proposals-table-body' was found, but is NOT a child of 'priority-proposals-section'. This is unexpected. Section outerHTML:", section.outerHTML.substring(0,500));
+         // Depending on desired robustness, one might choose to return here or try to use tableBody anyway.
+         // For now, we'll proceed if found by ID, but the warning is important.
+    }
+
+    tableBody.replaceChildren(); // Clear existing rows
+
+    if (!proposals || proposals.length === 0) {
+        section.classList.add('hidden');
+        // console.log("renderPriorityProposals: No priority proposals to display or proposals array empty.");
+        return;
+    }
+
+    section.classList.remove('hidden'); // Show section if there are proposals
+
     proposals.forEach(proposal => {
-        const row = priorityProposalsTable.insertRow();
+        const row = tableBody.insertRow();
         row.dataset.proposalId = proposal.id;
+
+        // Apply Tailwind classes for consistent styling
+        const cellClasses = ['py-2', 'px-4', 'border-b', 'border-gray-600', 'text-center'];
+        const titleCellClasses = [...cellClasses, 'break-words', 'whitespace-pre-wrap']; // For title
 
         const cellNumber  = row.insertCell(0);
         const cellTitle   = row.insertCell(1);
         const cellParty   = row.insertCell(2);
         const cellVote    = row.insertCell(3);
         const cellStatus  = row.insertCell(4);
-        const cellVoteReq = row.insertCell(5); // NEW: Vote Requirement cell
+        const cellVoteReq = row.insertCell(5);
         const cellStupid  = row.insertCell(6);
         const cellActions = row.insertCell(7);
 
-        cellNumber.classList.add('py-2','px-4','border-b','text-center');
-        cellTitle.classList.add('py-2','px-4','border-b','text-center','break-words','whitespace-pre-wrap');
-        cellParty.classList.add('py-2','px-4','border-b','text-center');
-        cellVote.classList.add('py-2','px-4','border-b','text-center');
-        cellStatus.classList.add('py-2','px-4','border-b','text-center');
-        cellVoteReq.classList.add('py-2','px-4','border-b','text-center');
-        cellStupid.classList.add('py-2','px-4','border-b','text-center');
-        cellActions.classList.add('py-2','px-4','border-b','text-center');
+        cellNumber.classList.add(...cellClasses);
+        cellTitle.classList.add(...titleCellClasses);
+        cellParty.classList.add(...cellClasses);
+        cellVote.classList.add(...cellClasses);
+        cellStatus.classList.add(...cellClasses);
+        cellVoteReq.classList.add(...cellClasses);
+        cellStupid.classList.add(...cellClasses);
+        cellActions.classList.add(...cellClasses);
 
         cellNumber.textContent = proposal.proposalVisual || '';
         cellTitle.textContent = proposal.title || '';
         cellParty.textContent = proposal.party || '';
+        cellVoteReq.textContent = proposal.voteRequirement || 'Rel';
 
+        cellVote.replaceChildren(); // Clear previous content
         if (proposal.stupid) {
-            cellVote.innerHTML = '(Stupid, no voting)';
+            cellVote.textContent = '(Stupid, no voting)';
         } else {
-            const voteChoices = ['For','Against','Abstain'];
-            const userVote = proposal.userVote || 'Abstain';
+            const voteChoices = ['For', 'Against', 'Abstain'];
+            const userVote = proposal.userVote || 'Abstain'; // Default to Abstain if no vote
             const voteForm = document.createElement('div');
-            voteForm.classList.add('flex','justify-center','space-x-4');
+            voteForm.classList.add('flex', 'justify-center', 'space-x-2', 'sm:space-x-4'); // Responsive spacing
+
             voteChoices.forEach(choice => {
                 const label = document.createElement('label');
-                label.classList.add('inline-flex','items-center','space-x-2');
+                label.classList.add('inline-flex', 'items-center', 'space-x-1', 'sm:space-x-2', 'cursor-pointer');
+
                 const radio = document.createElement('input');
                 radio.type = 'radio';
-                radio.name = `vote-${proposal.id}`;
+                radio.name = `vote-priority-${proposal.id}`;
                 radio.value = choice;
                 radio.checked = (userVote === choice);
                 radio.disabled = proposal.votingEnded;
-                radio.classList.add('form-radio','h-5','w-5','text-blue-600');
-                radio.addEventListener('change', () => {
-                    submitVote(proposal.id, choice);
-                });
+                radio.classList.add('form-radio', 'h-4', 'w-4', 'sm:h-5', 'sm:w-5', 'text-blue-500', 'bg-gray-700', 'border-gray-500', 'focus:ring-blue-500');
+                radio.addEventListener('change', () => submitVote(proposal.id, choice));
+
                 const span = document.createElement('span');
-                span.classList.add('text-sm');
+                span.classList.add('text-xs', 'sm:text-sm');
                 span.textContent = choice;
+
                 label.appendChild(radio);
                 label.appendChild(span);
                 voteForm.appendChild(label);
@@ -449,41 +595,54 @@ function renderPriorityProposals(proposals) {
             cellVote.appendChild(voteForm);
         }
 
+        cellStatus.replaceChildren(); // Clear previous content
         if (proposal.votingEnded) {
             const statusText = proposal.passed ? 'Passed' : 'Failed';
             const statusDetail = `For: ${proposal.totalFor}, Against: ${proposal.totalAgainst}`;
-            cellStatus.innerHTML = `<strong>${statusText}</strong><br>${statusDetail}`;
+            const strongElement = document.createElement('strong');
+            strongElement.textContent = statusText;
+            strongElement.classList.add(proposal.passed ? 'text-green-400' : 'text-red-400');
+            cellStatus.appendChild(strongElement);
+            cellStatus.appendChild(document.createElement('br'));
+            cellStatus.appendChild(document.createTextNode(statusDetail));
         } else {
             cellStatus.textContent = 'Voting in progress (priority)';
         }
 
-        // NEW: Set Vote Requirement cell
-        cellVoteReq.textContent = proposal.voteRequirement || 'Rel';
-
+        cellStupid.replaceChildren(); // Clear previous content
         if (currentUser && currentUser.role === 'PRESIDENT') {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.checked = proposal.stupid === true;
-            checkbox.classList.add('form-checkbox','h-5','w-5','text-blue-600');
-            checkbox.addEventListener('change', () => {
-                toggleStupidProposal(proposal.id, checkbox.checked);
-            });
+            // Apply consistent styling matching other tables
+            checkbox.classList.add('form-checkbox', 'h-5', 'w-5', 'text-blue-600', 'rounded', 'bg-gray-700', 'border-gray-500', 'focus:ring-blue-500');
+            checkbox.addEventListener('change', () => toggleStupidProposal(proposal.id, checkbox.checked));
             cellStupid.appendChild(checkbox);
         } else {
-            cellStupid.innerHTML = proposal.stupid ? 'Yes' : 'No';
+            cellStupid.textContent = proposal.stupid ? 'Yes' : 'No';
         }
 
+        cellActions.replaceChildren(); // Clear previous content
         if (currentUser && currentUser.role === 'PRESIDENT') {
-            cellActions.innerHTML = `
-                <button class="edit-proposal bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Edit</button>
-                <button class="remove-proposal bg-red-500 hover:bg-red-600 text-white py-1 px-2 rounded text-xs" data-id="${proposal.id}">Remove</button>
-            `;
-            cellActions.querySelector('.edit-proposal').addEventListener('click', () => openEditProposalWindow(proposal.id));
-            cellActions.querySelector('.remove-proposal').addEventListener('click', () => removeProposal(proposal.id));
+            const editButton = document.createElement('button');
+            editButton.classList.add('edit-proposal', 'bg-blue-500', 'hover:bg-blue-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+            editButton.dataset.id = proposal.id;
+            editButton.textContent = 'Edit';
+            editButton.addEventListener('click', () => openEditProposalWindow(proposal.id));
+
+            const removeButton = document.createElement('button');
+            removeButton.classList.add('remove-proposal', 'bg-red-500', 'hover:bg-red-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs', 'ml-1');
+            removeButton.dataset.id = proposal.id;
+            removeButton.textContent = 'Remove';
+            removeButton.addEventListener('click', () => removeProposal(proposal.id));
+
+            cellActions.appendChild(editButton);
+            cellActions.appendChild(removeButton);
         } else {
-            cellActions.innerHTML = '—';
+            cellActions.textContent = '—';
         }
     });
+    // console.log(`renderPriorityProposals: Rendered ${proposals.length} priority proposals.`);
 }
 
 async function fetchUsers() {
@@ -515,87 +674,123 @@ function renderSeats(users) {
 
 function addOrUpdateSeat(user) {
     let seat = document.getElementById(`seat-${user.id}`);
+    const seatLayout = document.getElementById('seat-layout');
 
-    if (!seat) {
+    if (!seat && seatLayout) {
         seat = document.createElement('div');
-        seat.classList.add('p-4','rounded-md','shadow','relative');
+        seat.classList.add('p-4', 'rounded-md', 'shadow', 'relative');
         seat.id = `seat-${user.id}`;
 
-        seat.innerHTML = `
-            <h3 class="text-lg font-semibold">${user.username}</h3>
-            <p class="text-sm">Role: ${user.role}</p>
-            <p class="text-sm">Party: ${user.partyAffiliation || 'N/A'}</p>
-            <p class="text-sm">Voličská síla: ${user.electoralStrength || 0}</p>
-            <div class="user-actions space-x-2"></div>
-        `;
-        document.getElementById('seat-layout').appendChild(seat);
+        const userNameElement = document.createElement('h3');
+        userNameElement.classList.add('text-lg', 'font-semibold');
+        // userNameElement.textContent will be set in updateSeatContent
+
+        const roleElement = document.createElement('p');
+        roleElement.classList.add('text-sm');
+        // roleElement.textContent will be set in updateSeatContent
+
+        const partyElement = document.createElement('p');
+        partyElement.classList.add('text-sm');
+        // partyElement.textContent will be set in updateSeatContent
+
+        const strengthElement = document.createElement('p');
+        strengthElement.classList.add('text-sm');
+        // strengthElement.textContent will be set in updateSeatContent
+
+        const actionsDiv = document.createElement('div');
+        actionsDiv.classList.add('user-actions', 'space-x-2');
+
+        seat.appendChild(userNameElement);
+        seat.appendChild(roleElement);
+        seat.appendChild(partyElement);
+        seat.appendChild(strengthElement);
+        seat.appendChild(actionsDiv);
+
+        seatLayout.appendChild(seat);
+    } else if (!seatLayout) {
+        console.error("Seat layout container not found!");
+        return; // Cannot add or update seat if layout container is missing
     }
 
-    updateSeatContent(seat, user);
-    updateSeatBackground(seat, user.seatStatus);
+    if (seat) { // Ensure seat exists before updating content
+        updateSeatContent(seat, user);
+        updateSeatBackground(seat, user.seatStatus);
+    } else {
+        // This case should ideally not be reached if the above logic is correct
+        // but as a fallback if seat is unexpectedly null (e.g. user.id is problematic)
+        console.error(`Seat element could not be found or created for user ID: ${user.id}`);
+    }
 }
 
 function updateSeatContent(seat, user) {
     const userId = String(user.id);
     const currentUserId = currentUser ? String(currentUser.id) : null;
 
-    seat.querySelector('h3').textContent = user.username;
-    seat.querySelector('p:nth-of-type(1)').textContent = `Role: ${user.role}`;
-    seat.querySelector('p:nth-of-type(2)').textContent = `Party: ${user.partyAffiliation || 'N/A'}`;
-    seat.querySelector('p:nth-of-type(3)').textContent = `Voličská síla: ${user.electoralStrength || 0}`;
+    const h3 = seat.querySelector('h3');
+    const p1 = seat.querySelector('p:nth-of-type(1)');
+    const p2 = seat.querySelector('p:nth-of-type(2)');
+    const p3 = seat.querySelector('p:nth-of-type(3)');
+
+    if (h3) h3.textContent = user.username;
+    if (p1) p1.textContent = `Role: ${user.role}`;
+    if (p2) p2.textContent = `Party: ${user.partyAffiliation || 'N/A'}`;
+    if (p3) p3.textContent = `Voličská síla: ${user.electoralStrength || 0}`;
 
     const userActionsDiv = seat.querySelector('.user-actions');
-    userActionsDiv.innerHTML = '';
+    
+    if (userActionsDiv) { // Ensure this block correctly wraps all userActionsDiv manipulations
+        userActionsDiv.replaceChildren(); // Clear previous buttons
 
-    if (currentUserId && userId === currentUserId) {
-        // Raise Hand
-        const raiseHandBtn = document.createElement('button');
-        raiseHandBtn.classList.add('bg-blue-500','hover:bg-blue-600','text-white','py-1','px-2','rounded','text-xs');
-        raiseHandBtn.textContent = 'Raise Hand';
-        raiseHandBtn.addEventListener('click', () => updateSeatStatus(user.id, 'REQUESTING_TO_SPEAK'));
-        userActionsDiv.appendChild(raiseHandBtn);
+        if (currentUserId && userId === currentUserId) {
+            // Raise Hand
+            const raiseHandBtn = document.createElement('button');
+            raiseHandBtn.classList.add('bg-blue-500', 'hover:bg-blue-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+            raiseHandBtn.textContent = 'Raise Hand';
+            raiseHandBtn.addEventListener('click', () => updateSeatStatus(user.id, 'REQUESTING_TO_SPEAK'));
+            userActionsDiv.appendChild(raiseHandBtn);
 
-        // Object
-        const objectBtn = document.createElement('button');
-        objectBtn.classList.add('bg-red-500','hover:bg-red-600','text-white','py-1','px-2','rounded','text-xs');
-        objectBtn.textContent = 'Object';
-        objectBtn.addEventListener('click', () => updateSeatStatus(user.id, 'OBJECTING'));
-        userActionsDiv.appendChild(objectBtn);
+            // Object
+            const objectBtn = document.createElement('button');
+            objectBtn.classList.add('bg-red-500', 'hover:bg-red-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+            objectBtn.textContent = 'Object';
+            objectBtn.addEventListener('click', () => updateSeatStatus(user.id, 'OBJECTING'));
+            userActionsDiv.appendChild(objectBtn);
 
-        // Cancel
-        if (user.seatStatus !== 'NEUTRAL') {
-            const cancelBtn = document.createElement('button');
-            cancelBtn.classList.add('bg-gray-500','hover:bg-gray-600','text-white','py-1','px-2','rounded','text-xs');
-            cancelBtn.textContent = 'Cancel';
-            cancelBtn.addEventListener('click', () => updateSeatStatus(user.id, 'NEUTRAL'));
-            userActionsDiv.appendChild(cancelBtn);
-        }
+            // Cancel
+            if (user.seatStatus !== 'NEUTRAL') {
+                const cancelBtn = document.createElement('button');
+                cancelBtn.classList.add('bg-gray-500', 'hover:bg-gray-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.addEventListener('click', () => updateSeatStatus(user.id, 'NEUTRAL'));
+                userActionsDiv.appendChild(cancelBtn);
+            }
 
-        // Call to Speak (President only)
-        if (currentUser.role === 'PRESIDENT' && user.seatStatus !== 'SPEAKING') {
-            const callToSpeakBtn = document.createElement('button');
-            callToSpeakBtn.classList.add('bg-green-500','hover:bg-green-600','text-white','py-1','px-2','rounded','text-xs');
-            callToSpeakBtn.textContent = 'Call to Speak';
-            callToSpeakBtn.addEventListener('click', () => updateSeatStatus(user.id, 'SPEAKING'));
-            userActionsDiv.appendChild(callToSpeakBtn);
+            // Call to Speak (President only)
+            if (currentUser && currentUser.role === 'PRESIDENT' && user.seatStatus !== 'SPEAKING') {
+                const callToSpeakBtn = document.createElement('button');
+                callToSpeakBtn.classList.add('bg-green-500', 'hover:bg-green-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+                callToSpeakBtn.textContent = 'Call to Speak';
+                callToSpeakBtn.addEventListener('click', () => updateSeatStatus(user.id, 'SPEAKING'));
+                userActionsDiv.appendChild(callToSpeakBtn);
+            }
+        } else if (currentUser && currentUser.role === 'PRESIDENT') {
+            // President controlling other user
+            if (user.seatStatus !== 'NEUTRAL' && user.seatStatus !== 'SPEAKING') {
+                const callToSpeakBtn = document.createElement('button');
+                callToSpeakBtn.classList.add('bg-green-500', 'hover:bg-green-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+                callToSpeakBtn.textContent = 'Call to Speak';
+                callToSpeakBtn.addEventListener('click', () => updateSeatStatus(user.id, 'SPEAKING'));
+                userActionsDiv.appendChild(callToSpeakBtn);
+            }
+            if (user.seatStatus !== 'NEUTRAL') {
+                const cancelBtn = document.createElement('button');
+                cancelBtn.classList.add('bg-gray-500', 'hover:bg-gray-600', 'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.addEventListener('click', () => updateSeatStatus(user.id, 'NEUTRAL'));
+                userActionsDiv.appendChild(cancelBtn);
+            }
         }
-    } else if (currentUser && currentUser.role === 'PRESIDENT') {
-        // President controlling other user
-        if (user.seatStatus !== 'NEUTRAL' && user.seatStatus !== 'SPEAKING') {
-            const callToSpeakBtn = document.createElement('button');
-            callToSpeakBtn.classList.add('bg-green-500','hover:bg-green-600','text-white','py-1','px-2','rounded','text-xs');
-            callToSpeakBtn.textContent = 'Call to Speak';
-            callToSpeakBtn.addEventListener('click', () => updateSeatStatus(user.id, 'SPEAKING'));
-            userActionsDiv.appendChild(callToSpeakBtn);
-        }
-        if (user.seatStatus !== 'NEUTRAL') {
-            const cancelBtn = document.createElement('button');
-            cancelBtn.classList.add('bg-gray-500','hover:bg-gray-600','text-white','py-1','px-2','rounded','text-xs');
-            cancelBtn.textContent = 'Cancel';
-            cancelBtn.addEventListener('click', () => updateSeatStatus(user.id, 'NEUTRAL'));
-            userActionsDiv.appendChild(cancelBtn);
-        }
-    }
+    } // This is the closing brace for if (userActionsDiv)
 }
 
 function updateSeatBackground(seat, seatStatus) {
@@ -625,14 +820,15 @@ async function updateSeatStatus(userId, status) {
         const payload = { id: userId, seatStatus: status };
         const response = await fetch('/api/users/update-status', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeadersWithCsrf(),
             body: JSON.stringify(payload)
         });
 
         if (response.ok) {
-            const updatedUser = await fetchUserById(userId);
+            const updatedUser = await response.json(); // Get updated user from response
             if (updatedUser) {
-                addOrUpdateSeat(updatedUser);
+                addOrUpdateSeat(updatedUser); // Update UI with returned user data for the current client
+                // Client-side broadcast removed; server now handles broadcasting to all clients.
             }
             let msg = '';
             switch (status) {
@@ -681,7 +877,7 @@ async function submitVote(proposalId, voteChoice) {
     try {
         const response = await fetch('/api/proposals/vote', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeadersWithCsrf(),
             body: JSON.stringify({ proposalId, voteChoice })
         });
 
@@ -714,8 +910,10 @@ if (loginForm) {
             });
 
             if (response.ok) {
+                const responseData = await response.json(); // Parse JSON response
+                csrfToken = responseData.csrfToken; // Store CSRF token
                 showAlert('Login successful!', 'success');
-                await initializeApp();
+                await setupAuthenticatedSession(true); // Call the correct setup function
             } else {
                 const errorText = await response.text();
                 showAlert(errorText || 'Login failed.', 'error');
@@ -741,7 +939,7 @@ endBreakButton.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/end-break', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: getHeadersWithCsrf()
         });
 
         if (response.ok) {
@@ -806,7 +1004,7 @@ if (logoutButton) {
         try {
             const response = await fetch('/api/logout', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
+                headers: getHeadersWithCsrf()
             });
 
             if (response.ok) {
@@ -851,7 +1049,7 @@ addProposalButton.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/proposals', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeadersWithCsrf(),
             body: JSON.stringify({
                 title,
                 party,
@@ -864,6 +1062,7 @@ addProposalButton.addEventListener('click', async () => {
         });
         if (response.ok) {
             showAlert('Proposal added successfully!', 'success');
+            await fetchProposals(); // Add this line to refresh
             newProposalTitle.value = '';
             newProposalParty.value = '';
             newProposalCategory.value = 'normal';
@@ -886,7 +1085,7 @@ endConstitutionalVotingButton.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/proposals/end-voting-constitutional', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: getHeadersWithCsrf()
         });
         if (response.ok) {
             showAlert('Constitutional voting ended successfully. Votes counted.', 'success');
@@ -917,7 +1116,7 @@ imposeFineButton.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/impose-fine', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeadersWithCsrf(),
             body: JSON.stringify({ username, amount, reason })
         });
 
@@ -943,7 +1142,7 @@ callBreakButton.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/break', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: getHeadersWithCsrf()
         });
 
         if (response.ok) {
@@ -968,12 +1167,12 @@ endSessionButton.addEventListener('click', async () => {
     try {
         await fetch('/api/end-break', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: getHeadersWithCsrf()
         });
 
         const response1 = await fetch('/api/end-session', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: getHeadersWithCsrf()
         });
 
         if (response1.ok) {
@@ -994,7 +1193,7 @@ endVotingButton.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/proposals/end-voting', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: getHeadersWithCsrf()
         });
 
         if (response.ok) {
@@ -1016,7 +1215,7 @@ endPriorityVotingButton.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/proposals/end-voting-priority', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: getHeadersWithCsrf()
         });
 
         if (response.ok) {
@@ -1036,7 +1235,7 @@ joinSeatButton.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/join-seat', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: getHeadersWithCsrf()
         });
 
         if (response.ok) {
@@ -1068,7 +1267,7 @@ function handleFineImposed(username, amount) {
 }
 
 function handleEndSession() {
-    alert('The session has been ended.');
+    showAlert('The session has been ended.', 'info');
     handleEndBreak();
     resetApp();
 }
@@ -1105,11 +1304,23 @@ function initializeWebSocket() {
     ws.onmessage = (event) => {
         try {
             const message = JSON.parse(event.data);
-            console.log('Received:', message);
+            console.log('Received WebSocket message:', message);
 
             switch (message.type) {
                 case 'seatUpdate':
                     handleSeatUpdate(message.user);
+                    break;
+                case 'proposalUpdate':
+                    console.log('Proposal update received, fetching proposals.');
+                    fetchProposals();
+                    break;
+                case 'proposalDelete':
+                    console.log(`Proposal deletion received for ID: ${message.proposalId}, removing from UI.`);
+                    removeProposalFromUI(message.proposalId);
+                    break;
+                case 'proposalsUpdated':
+                    console.log('General proposal update received (e.g., voting ended), fetching proposals.');
+                    fetchProposals();
                     break;
                 case 'fineImposed':
                     handleFineImposed(message.username, message.amount);
@@ -1124,10 +1335,10 @@ function initializeWebSocket() {
                     handleEndSession();
                     break;
                 default:
-                    console.warn('Unknown message type:', message.type);
+                    console.warn('Unknown WebSocket message type:', message.type);
             }
         } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
+            console.error('Error processing WebSocket message:', event.data, error);
         }
     };
 
@@ -1144,93 +1355,92 @@ function initializeWebSocket() {
 // ======================
 // Application Initialization
 // ======================
-function startPolling() {
-  pollUsersAndBreak();
-  pollProposals();
-}
-
-async function pollUsersAndBreak() {
-  try {
-    await fetchUsers();
-    await checkBreakStatus();
-  } catch (error) {
-    console.error("Polling (users/break) error:", error);
-  } finally {
-    setTimeout(pollUsersAndBreak, 1500);
-  }
-}
-
-async function pollProposals() {
-  try {
-    await fetchProposals();
-  } catch (error) {
-    console.error("Polling (proposals) error:", error);
-  } finally {
-    setTimeout(pollProposals, 5000);
-  }
-}
-
-async function initializeApp() {
-    authContainer.classList.add('hidden');
-    mainContainer.classList.remove('hidden');
-
-    currentUser = await fetchUserInfo();
-    if (currentUser && currentUser.role === 'PRESIDENT') {
-        presidentActions.classList.remove('hidden');
-    } else {
-        presidentActions.classList.add('hidden');
+async function setupAuthenticatedSession(isInitialLoad = false) {
+    if (!currentUser) {
+        currentUser = await fetchUserInfo();
     }
 
-    // Hide or show the "Stupid?" columns based on role
-    if (currentUser && currentUser.role === 'PRESIDENT') {
-        normalStupidHeader.classList.remove('hidden');
-        priorityStupidHeader.classList.remove('hidden');
+    if (currentUser) {
+        if (authContainer) authContainer.classList.add('hidden');
+        if (mainContainer) mainContainer.classList.remove('hidden');
+
+        if (presidentActions) {
+            if (currentUser.role === 'PRESIDENT') {
+                presidentActions.classList.remove('hidden');
+            } else {
+                presidentActions.classList.add('hidden');
+            }
+        }
+
+        // Hide or show the "Stupid?" columns based on role
+        const constitutionalStupidHeader = document.getElementById('constitutional-stupid-header'); // Get the element
+        if (currentUser.role === 'PRESIDENT') {
+            if (normalStupidHeader) normalStupidHeader.classList.remove('hidden');
+            if (priorityStupidHeader) priorityStupidHeader.classList.remove('hidden');
+            if (constitutionalStupidHeader) constitutionalStupidHeader.classList.remove('hidden'); // Show if president
+        } else {
+            if (normalStupidHeader) normalStupidHeader.classList.add('hidden');
+            if (priorityStupidHeader) priorityStupidHeader.classList.add('hidden');
+            if (constitutionalStupidHeader) constitutionalStupidHeader.classList.add('hidden'); // Hide if not president
+        }
+
+        await checkBreakStatus(); 
+        await fetchProposals();
+        await fetchUsers();
+        
+        if (ws === null || ws.readyState === WebSocket.CLOSED) {
+             initializeWebSocket();
+        }
+       
+        // Polling is removed - rely on initial fetch and WebSockets
+        // if (isInitialLoad) { 
+        //     startPolling();
+        // }
     } else {
-        normalStupidHeader.classList.add('hidden');
-        priorityStupidHeader.classList.add('hidden');
+        // Not authenticated or failed to fetch user info
+        if (authContainer) authContainer.classList.remove('hidden');
+        if (mainContainer) mainContainer.classList.add('hidden');
+        if (presidentActions) presidentActions.classList.add('hidden');
+        resetApp(); // Ensure app is fully reset to auth state
     }
-
-    await checkBreakStatus();
-    await fetchProposals();
-    await fetchUsers();
-
-    initializeWebSocket();
-    startPolling();
 }
 
 function resetApp() {
-    mainContainer.classList.add('hidden');
-    authContainer.classList.remove('hidden');
+    if (mainContainer) mainContainer.classList.add('hidden');
+    if (authContainer) authContainer.classList.remove('hidden');
     if (loginForm) loginForm.reset();
     if (registerForm) registerForm.reset();
 
-    proposalsTable.innerHTML = '';
-    priorityProposalsTable.innerHTML = '';
-    document.getElementById('seat-layout').innerHTML = '';
-    presidentActions.classList.add('hidden');
+    if (proposalsTable) proposalsTable.replaceChildren();
+    // Correctly target the tbody for priority proposals
+    const priorityProposalsTableBody = document.getElementById('priority-proposals-table-body');
+    if (priorityProposalsTableBody) priorityProposalsTableBody.replaceChildren();
+
+    const constitutionalProposalsTableBody = document.getElementById('constitutional-proposals-table-body');
+    if (constitutionalProposalsTableBody) constitutionalProposalsTableBody.replaceChildren();
+    
+    const seatLayout = document.getElementById('seat-layout');
+    if (seatLayout) seatLayout.replaceChildren();
+    
+    if (presidentActions) presidentActions.classList.add('hidden');
 
     if (ws) {
-        ws.close();
+        ws.onclose = null; // Prevent automatic reconnection on manual logout/reset
+        ws.close(); 
         ws = null;
     }
+    csrfToken = null; // Clear CSRF token on app reset/logout
+    // Stop polling - No longer needed as polling functions are removed
 }
 
 async function checkAuthentication() {
-    currentUser = await fetchUserInfo();
+    currentUser = await fetchUserInfo(); 
+    // Only proceed to setup if fetchUserInfo succeeded
     if (currentUser) {
-        authContainer.classList.add('hidden');
-        mainContainer.classList.remove('hidden');
-        if (currentUser.role === 'PRESIDENT') {
-            presidentActions.classList.remove('hidden');
-        } else {
-            presidentActions.classList.add('hidden');
-        }
-        await fetchProposals();
-        await fetchUsers();
-        initializeWebSocket();
+        await setupAuthenticatedSession(true); // Pass true for initial load setup
     } else {
-        authContainer.classList.remove('hidden');
-        mainContainer.classList.add('hidden');
+        // Stay on auth screen if user info fetch failed (e.g., 401)
+        resetApp(); // Ensure clean state showing login/register
     }
 }
 
@@ -1239,7 +1449,12 @@ window.addEventListener('DOMContentLoaded', () => {
         loginTab.addEventListener('click', () => switchTab('login'));
         registerTab.addEventListener('click', () => switchTab('register'));
     }
-    checkAuthentication();
+    // Add event listener for the proposal association type dropdown
+    if (newProposalAssociationType) { 
+        newProposalAssociationType.addEventListener('change', controlAssProposal);
+    }
+    
+    checkAuthentication(); // Check auth on load
 });
 
 if (window.location.pathname.endsWith('/admin.html')) {
@@ -1249,7 +1464,7 @@ if (window.location.pathname.endsWith('/admin.html')) {
 async function initializeAdminDashboard() {
     currentUser = await fetchUserInfo();
     if (!currentUser || currentUser.role !== 'PRESIDENT') {
-        alert('Access denied. Only the president can access this page.');
+        showAlert('Access denied. Only the president can access this page.', 'error');
         window.location.href = '/';
         return;
     }
@@ -1263,7 +1478,7 @@ async function removeProposal(proposalId) {
     try {
         const response = await fetch(`/api/proposals/${proposalId}`, {
             method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' }
+            headers: getHeadersWithCsrf()
         });
 
         if (response.ok) {
@@ -1281,32 +1496,60 @@ async function removeProposal(proposalId) {
 
 function openEditProposalWindow(proposalId) {
     const modal = document.createElement('div');
-    modal.classList.add('modal','fixed','inset-0','flex','items-center','justify-center','z-50','bg-black','bg-opacity-50');
-    modal.innerHTML = `
-        <div class="modal-content bg-gray-700 p-6 rounded">
-            <h2 class="text-xl font-bold mb-4">Edit Proposal</h2>
-            <label class="block mb-2">Title</label>
-            <textarea id="edit-proposal-title"
-                      rows="4"
-                      class="w-full mb-4 px-3 py-2 rounded bg-gray-800 text-white"></textarea>
+    modal.classList.add('modal', 'fixed', 'inset-0', 'flex', 'items-center', 'justify-center', 'z-50', 'bg-black', 'bg-opacity-50');
 
-            <label class="block mb-2">Party</label>
-            <input type="text" id="edit-proposal-party"
-                   class="w-full mb-4 px-3 py-2 rounded bg-gray-800 text-white">
+    const modalContent = document.createElement('div');
+    modalContent.classList.add('modal-content', 'bg-gray-700', 'p-6', 'rounded');
 
-            <button id="save-proposal" class="bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded">Save</button>
-            <button id="close-modal" class="bg-gray-500 hover:bg-gray-600 text-white py-2 px-4 rounded">Cancel</button>
-        </div>
-    `;
+    const titleHeader = document.createElement('h2');
+    titleHeader.classList.add('text-xl', 'font-bold', 'mb-4');
+    titleHeader.textContent = 'Edit Proposal';
+
+    const titleLabel = document.createElement('label');
+    titleLabel.classList.add('block', 'mb-2');
+    titleLabel.textContent = 'Title';
+
+    const titleTextarea = document.createElement('textarea');
+    titleTextarea.id = 'edit-proposal-title';
+    titleTextarea.rows = 4;
+    titleTextarea.classList.add('w-full', 'mb-4', 'px-3', 'py-2', 'rounded', 'bg-gray-800', 'text-white');
+
+    const partyLabel = document.createElement('label');
+    partyLabel.classList.add('block', 'mb-2');
+    partyLabel.textContent = 'Party';
+
+    const partyInput = document.createElement('input');
+    partyInput.type = 'text';
+    partyInput.id = 'edit-proposal-party';
+    partyInput.classList.add('w-full', 'mb-4', 'px-3', 'py-2', 'rounded', 'bg-gray-800', 'text-white');
+
+    const saveButton = document.createElement('button');
+    saveButton.id = 'save-proposal';
+    saveButton.classList.add('bg-green-500', 'hover:bg-green-600', 'text-white', 'py-2', 'px-4', 'rounded');
+    saveButton.textContent = 'Save';
+
+    const cancelButton = document.createElement('button');
+    cancelButton.id = 'close-modal';
+    cancelButton.classList.add('bg-gray-500', 'hover:bg-gray-600', 'text-white', 'py-2', 'px-4', 'rounded', 'ml-2');
+    cancelButton.textContent = 'Cancel';
+
+    modalContent.appendChild(titleHeader);
+    modalContent.appendChild(titleLabel);
+    modalContent.appendChild(titleTextarea);
+    modalContent.appendChild(partyLabel);
+    modalContent.appendChild(partyInput);
+    modalContent.appendChild(saveButton);
+    modalContent.appendChild(cancelButton);
+    modal.appendChild(modalContent);
     document.body.appendChild(modal);
 
-    modal.querySelector('#close-modal').addEventListener('click', () => modal.remove());
+    cancelButton.addEventListener('click', () => modal.remove());
 
     fetch(`/api/proposals/${proposalId}`)
         .then(response => response.json())
         .then(proposal => {
-            document.getElementById('edit-proposal-title').value = proposal.title || '';
-            document.getElementById('edit-proposal-party').value = proposal.party || '';
+            titleTextarea.value = proposal.title || '';
+            partyInput.value = proposal.party || '';
         })
         .catch(error => {
             console.error('Error fetching proposal data:', error);
@@ -1314,9 +1557,9 @@ function openEditProposalWindow(proposalId) {
             modal.remove();
         });
 
-    modal.querySelector('#save-proposal').addEventListener('click', async () => {
-        const updatedTitle = document.getElementById('edit-proposal-title').value.trim();
-        const updatedParty = document.getElementById('edit-proposal-party').value.trim();
+    saveButton.addEventListener('click', async () => {
+        const updatedTitle = titleTextarea.value.trim();
+        const updatedParty = partyInput.value.trim();
 
         await updateProposal(proposalId, updatedTitle, updatedParty);
         modal.remove();
@@ -1327,7 +1570,7 @@ async function updateProposal(proposalId, title, party) {
     try {
         const response = await fetch(`/api/proposals/${proposalId}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeadersWithCsrf(),
             body: JSON.stringify({ title, party })
         });
 
@@ -1342,4 +1585,38 @@ async function updateProposal(proposalId, title, party) {
         console.error("Error updating proposal:", error);
         showAlert("An error occurred while updating the proposal.", "error");
     }
+}
+
+// New function to remove a proposal row from all tables
+function removeProposalFromUI(proposalId) {
+    const selectors = [
+        `#proposals-table tr[data-proposal-id="${proposalId}"]`,
+        `#priority-proposals-table-body tr[data-proposal-id="${proposalId}"]`,
+        `#constitutional-proposals-table-body tr[data-proposal-id="${proposalId}"]`
+    ];
+    selectors.forEach(selector => {
+        const row = document.querySelector(selector);
+        if (row) {
+            row.remove();
+        }
+    });
+    // Potentially re-check if proposal sections should be hidden if they become empty
+    checkProposalSectionsVisibility(); 
+}
+
+// Helper function to hide sections if their tables are empty
+function checkProposalSectionsVisibility() {
+    const sections = [
+        { sectionId: 'proposals-section', tableBodyId: 'proposals-table' }, // Assuming normal proposals have a wrapper section
+        { sectionId: 'priority-proposals-section', tableBodyId: 'priority-proposals-table-body' },
+        { sectionId: 'constitutional-proposals-section', tableBodyId: 'constitutional-proposals-table-body' }
+    ];
+    sections.forEach(item => {
+        const section = document.getElementById(item.sectionId);
+        const tableBody = document.getElementById(item.tableBodyId);
+        if (section && tableBody && tableBody.rows.length === 0) {
+            section.classList.add('hidden');
+        }
+         // Note: Logic to re-show sections if they become non-empty is handled by render functions
+    });
 }

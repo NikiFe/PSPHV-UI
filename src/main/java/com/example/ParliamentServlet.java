@@ -23,6 +23,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.*;
+import java.util.UUID; // For CSRF token generation
 
 import static com.mongodb.client.model.Filters.eq;
 
@@ -187,7 +188,7 @@ public class ParliamentServlet extends HttpServlet {
             }
         } else {
             response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
-            logger.warn("Unknown GET endpoint: {}", path);
+            logger.warn("Unknown GET endpoint: path is null");
         }
     }
 
@@ -295,20 +296,28 @@ public class ParliamentServlet extends HttpServlet {
     private void handleDeleteProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
         HttpSession session = request.getSession(false);
         if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
-            String proposalId = request.getPathInfo().split("/")[2];
+            String proposalIdString = request.getPathInfo().split("/")[2];
 
             try {
-                Document query = new Document("_id", new ObjectId(proposalId));
+                ObjectId proposalId = new ObjectId(proposalIdString);
+                Document query = new Document("_id", proposalId);
                 proposalsCollection.deleteOne(query);
+
+                // Broadcast the deletion event
+                JSONObject deleteMsg = new JSONObject();
+                deleteMsg.put("type", "proposalDelete");
+                deleteMsg.put("proposalId", proposalIdString);
+                SeatWebSocket.broadcast(deleteMsg);
+                logger.info("Broadcasted proposalDelete for id '{}'.", proposalIdString);
 
                 response.setStatus(HttpServletResponse.SC_OK);
                 JSONObject resp = new JSONObject();
                 resp.put("message", "Proposal deleted successfully.");
                 response.setContentType("application/json");
                 response.getWriter().write(resp.toString());
-                logger.info("President deleted proposal with id '{}'.", proposalId);
+                logger.info("President deleted proposal with id '{}'.", proposalIdString);
             } catch (IllegalArgumentException e) {
-                logger.error("Invalid proposal ID format: {}", proposalId);
+                logger.error("Invalid proposal ID format: {}", proposalIdString);
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID format.");
             } catch (Exception e) {
                 logger.error("Error deleting proposal: ", e);
@@ -340,21 +349,18 @@ public class ParliamentServlet extends HttpServlet {
     private void handleUpdateProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
         HttpSession session = request.getSession(false);
         if (session != null && "PRESIDENT".equals(session.getAttribute("role"))) {
-            String proposalId = request.getPathInfo().split("/")[2];
+            String proposalIdString = request.getPathInfo().split("/")[2]; // Renamed for clarity
+            ObjectId proposalId = new ObjectId(proposalIdString);
 
             try {
-                // Read JSON payload
                 StringBuilder sb = new StringBuilder();
                 String line;
                 while ((line = request.getReader().readLine()) != null) {
                     sb.append(line);
                 }
                 JSONObject updateData = new JSONObject(sb.toString());
-
-                // Build the "$set" fields dynamically
                 Document setFields = new Document();
 
-                // 1) Title
                 if (updateData.has("title")) {
                     String title = updateData.getString("title");
                     if (title.trim().isEmpty()) {
@@ -364,7 +370,6 @@ public class ParliamentServlet extends HttpServlet {
                     setFields.put("title", title);
                 }
 
-                // 2) Party
                 if (updateData.has("party")) {
                     String party = updateData.getString("party").trim();
                     if (party.isEmpty()) {
@@ -374,45 +379,25 @@ public class ParliamentServlet extends HttpServlet {
                     setFields.put("party", party);
                 }
 
-                // 3) Stupid toggle logic
                 if (updateData.has("stupid")) {
                     boolean newStupidValue = updateData.getBoolean("stupid");
-
-                    // First, fetch the existing proposal to see old values
-                    Document existingProposal = proposalsCollection.find(
-                            eq("_id", new ObjectId(proposalId))
-                    ).first();
-
+                    Document existingProposal = proposalsCollection.find(eq("_id", proposalId)).first();
                     if (existingProposal == null) {
                         response.sendError(HttpServletResponse.SC_NOT_FOUND, "Proposal not found.");
                         return;
                     }
-
                     boolean oldStupidValue = existingProposal.getBoolean("stupid", false);
                     boolean alreadyEnded = existingProposal.getBoolean("votingEnded", false);
-
-                    // If we are toggling from "not stupid" -> "stupid",
-                    // then automatically end voting for it.
                     if (!oldStupidValue && newStupidValue) {
                         setFields.put("votingEnded", true);
-                    }
-                    // If we are toggling from "stupid" -> "not stupid",
-                    // then revert "votingEnded" to false (only if it was
-                    // ended previously *because* it was stupid).
-                    else if (oldStupidValue && !newStupidValue) {
-                        // If it's "votingEnded" but not truly ended by a normal/prio vote,
-                        // we can revert it:
+                    } else if (oldStupidValue && !newStupidValue) {
                         if (alreadyEnded) {
-                            // We'll assume it was ended only because it was stupid.
-                            // Revert to not ended:
                             setFields.put("votingEnded", false);
                         }
                     }
-
                     setFields.put("stupid", newStupidValue);
                 }
 
-                // If no fields found to update
                 if (setFields.isEmpty()) {
                     response.setStatus(HttpServletResponse.SC_OK);
                     JSONObject resp = new JSONObject();
@@ -422,21 +407,33 @@ public class ParliamentServlet extends HttpServlet {
                     return;
                 }
 
-                // Perform the MongoDB update
-                Document query = new Document("_id", new ObjectId(proposalId));
+                Document query = new Document("_id", proposalId);
                 Document updateDoc = new Document("$set", setFields);
                 proposalsCollection.updateOne(query, updateDoc);
+
+                // Fetch the updated proposal to broadcast its latest state
+                Document updatedProposalDoc = proposalsCollection.find(eq("_id", proposalId)).first();
+                if (updatedProposalDoc != null) {
+                    JSONObject updatedProposalJson = new JSONObject(updatedProposalDoc.toJson());
+                    updatedProposalJson.put("id", updatedProposalDoc.getObjectId("_id").toHexString());
+                    updatedProposalJson.remove("_id");
+
+                    JSONObject proposalUpdateMsg = new JSONObject();
+                    proposalUpdateMsg.put("type", "proposalUpdate");
+                    proposalUpdateMsg.put("proposal", updatedProposalJson);
+                    SeatWebSocket.broadcast(proposalUpdateMsg);
+                    logger.info("Broadcasted proposalUpdate for id '{}' after president update.", proposalIdString);
+                }
 
                 response.setStatus(HttpServletResponse.SC_OK);
                 JSONObject resp = new JSONObject();
                 resp.put("message", "Proposal updated successfully.");
                 response.setContentType("application/json");
                 response.getWriter().write(resp.toString());
-
-                logger.info("President updated proposal (id '{}') with data: {}", proposalId, setFields.toJson());
+                logger.info("President updated proposal (id '{}') with data: {}", proposalIdString, setFields.toJson());
 
             } catch (IllegalArgumentException e) {
-                logger.error("Invalid proposal ID format: {}", proposalId);
+                logger.error("Invalid proposal ID format: {}", proposalIdString);
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID format.");
             } catch (Exception e) {
                 logger.error("Error updating proposal: ", e);
@@ -477,12 +474,17 @@ public class ParliamentServlet extends HttpServlet {
                     session.setAttribute("userId", userDoc.getObjectId("_id").toHexString());
                     session.setAttribute("electoralStrength", userDoc.getInteger("electoralStrength", 1));
 
+                    // Generate and store CSRF token
+                    String csrfToken = UUID.randomUUID().toString();
+                    session.setAttribute(CsrfFilter.CSRF_TOKEN_SESSION_ATTR_NAME, csrfToken);
+
                     response.setStatus(HttpServletResponse.SC_OK);
                     JSONObject resp = new JSONObject();
                     resp.put("message", "Login successful.");
+                    resp.put(CsrfFilter.CSRF_TOKEN_SESSION_ATTR_NAME, csrfToken); // Send token to client
                     response.setContentType("application/json");
                     response.getWriter().write(resp.toString());
-                    logger.info("User '{}' logged in successfully.", username);
+                    logger.info("User '{}' logged in successfully. CSRF token generated.", username);
                     return;
                 }
             }
@@ -505,6 +507,17 @@ public class ParliamentServlet extends HttpServlet {
                 userJson.put("id", userDoc.getObjectId("_id").toHexString());
                 userJson.remove("_id");
                 userJson.remove("password"); // remove sensitive data
+
+                // Retrieve CSRF token from session and add to response
+                String sessionToken = (String) session.getAttribute(CsrfFilter.CSRF_TOKEN_SESSION_ATTR_NAME);
+                if (sessionToken != null) {
+                    userJson.put(CsrfFilter.CSRF_TOKEN_HEADER_NAME, sessionToken); // Use consistent key name
+                } else {
+                    // This case is unlikely if the user is properly logged in via handleLogin,
+                    // but log a warning if it happens.
+                    logger.warn("CSRF token not found in session for authenticated user '{}' during user-info request.", username);
+                }
+
                 response.setContentType("application/json");
                 response.getWriter().write(userJson.toString());
             } else {
@@ -524,6 +537,10 @@ public class ParliamentServlet extends HttpServlet {
                 if (username != null) {
                     usersCollection.updateOne(Filters.eq("username", username), Updates.set("present", false));
                 }
+                // Remove CSRF token from session
+                session.removeAttribute(CsrfFilter.CSRF_TOKEN_SESSION_ATTR_NAME);
+                logger.info("CSRF token removed for user '{}' during logout.", username);
+
                 session.invalidate();
                 response.setStatus(HttpServletResponse.SC_OK);
                 JSONObject resp = new JSONObject();
@@ -589,9 +606,9 @@ public class ParliamentServlet extends HttpServlet {
                 while ((line = request.getReader().readLine()) != null) {
                     sb.append(line);
                 }
-                JSONObject statusUpdate = new JSONObject(sb.toString());
-                String userId = statusUpdate.getString("id");
-                String newStatus = statusUpdate.getString("seatStatus");
+                JSONObject statusUpdateJson = new JSONObject(sb.toString()); // Renamed for clarity
+                String userId = statusUpdateJson.getString("id");
+                String newStatus = statusUpdateJson.getString("seatStatus");
 
                 Document query = new Document("_id", new ObjectId(userId));
                 Document userDoc = usersCollection.find(query).first();
@@ -618,21 +635,25 @@ public class ParliamentServlet extends HttpServlet {
                     usersCollection.updateOne(query, update);
 
                     Document updatedUserDoc = usersCollection.find(query).first();
-                    JSONObject userJson = new JSONObject(updatedUserDoc.toJson());
-                    userJson.put("id", updatedUserDoc.getObjectId("_id").toHexString());
-                    userJson.remove("_id");
+                    JSONObject userJsonForResponse = new JSONObject(updatedUserDoc.toJson());
+                    userJsonForResponse.put("id", updatedUserDoc.getObjectId("_id").toHexString());
+                    userJsonForResponse.remove("_id");
+                    userJsonForResponse.remove("password"); // Ensure password is not sent in HTTP response
 
-                    JSONObject seatUpdate = new JSONObject();
-                    seatUpdate.put("type", "seatUpdate");
-                    seatUpdate.put("user", userJson);
-                    SeatWebSocket.broadcast(seatUpdate);
+                    // Prepare user JSON for WebSocket broadcast (can be the same or slightly different if needed)
+                    JSONObject userJsonForBroadcast = new JSONObject(userJsonForResponse.toString()); // Create a copy for broadcast
+
+                    // Broadcast the change via WebSocket
+                    JSONObject seatUpdateMsg = new JSONObject();
+                    seatUpdateMsg.put("type", "seatUpdate");
+                    seatUpdateMsg.put("user", userJsonForBroadcast);
+                    SeatWebSocket.broadcast(seatUpdateMsg);
+                    logger.info("Broadcasted seatUpdate for user '{}' due to status change.", targetUsername);
 
                     response.setStatus(HttpServletResponse.SC_OK);
-                    JSONObject resp = new JSONObject();
-                    resp.put("message", "Seat status updated successfully.");
                     response.setContentType("application/json");
-                    response.getWriter().write(resp.toString());
-                    logger.info("User '{}' updated seat status of '{}' to '{}'.", requesterUsername, targetUsername, newStatus);
+                    response.getWriter().write(userJsonForResponse.toString()); // Return the updated user document
+                    logger.info("User '{}' updated seat status of '{}' to '{}'. Returned updated user data.", requesterUsername, targetUsername, newStatus);
                 } else {
                     response.sendError(HttpServletResponse.SC_NOT_FOUND, "User not found.");
                     logger.warn("User with ID '{}' not found.", userId);
@@ -855,6 +876,11 @@ public class ParliamentServlet extends HttpServlet {
                 for (Document proposal : proposals) {
                     endProposalVoting(proposal, adjustedMap);
                 }
+                
+                // Broadcast that proposal states have been updated
+                JSONObject updateMsg = new JSONObject().put("type", "proposalsUpdated");
+                SeatWebSocket.broadcast(updateMsg);
+                logger.info("Broadcasted proposalsUpdated after ending normal voting.");
 
                 sendVotingResultsToDiscord();
                 incrementMeetingNumber();
@@ -904,7 +930,11 @@ public class ParliamentServlet extends HttpServlet {
                     endProposalVoting(proposal, adjustedMap);
                 }
 
-                // No Discord call here
+                // Broadcast that proposal states have been updated
+                JSONObject updateMsg = new JSONObject().put("type", "proposalsUpdated");
+                SeatWebSocket.broadcast(updateMsg);
+                logger.info("Broadcasted proposalsUpdated after ending priority voting.");
+
                 response.setStatus(HttpServletResponse.SC_OK);
                 JSONObject resp = new JSONObject();
                 resp.put("message", "Priority voting ended. Votes counted, no Discord message yet.");
@@ -945,6 +975,11 @@ public class ParliamentServlet extends HttpServlet {
                     endProposalVoting(proposal, adjustedMap);
                 }
 
+                // Broadcast that proposal states have been updated
+                JSONObject updateMsg = new JSONObject().put("type", "proposalsUpdated");
+                SeatWebSocket.broadcast(updateMsg);
+                logger.info("Broadcasted proposalsUpdated after ending constitutional voting.");
+                
                 response.setStatus(HttpServletResponse.SC_OK);
                 JSONObject resp = new JSONObject();
                 resp.put("message", "Constitutional voting ended. Votes counted.");
