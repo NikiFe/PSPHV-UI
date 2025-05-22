@@ -4,6 +4,8 @@ import java.util.stream.Collectors;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.FindOneAndUpdateOptions;
+import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.Updates;
 import com.mongodb.client.model.Sorts;
@@ -36,6 +38,7 @@ public class ParliamentServlet extends HttpServlet {
     private final MongoCollection<Document> votingLogsCollection;
     private final MongoCollection<Document> fineReasonsCollection;
     private final MongoCollection<Document> systemParametersCollection;
+    private final MongoCollection<Document> proposalCountersCollection;
 
     private String discordWebhookUrl;
 
@@ -47,6 +50,7 @@ public class ParliamentServlet extends HttpServlet {
         this.votingLogsCollection = database.getCollection("votingLogs");
         this.fineReasonsCollection = database.getCollection("fineReasons");
         this.systemParametersCollection = database.getCollection("systemParameters");
+        this.proposalCountersCollection = database.getCollection("proposalCounters");
 
         // Ensure break status is initialized if missing
         initializeBreakStatus();
@@ -206,12 +210,32 @@ public class ParliamentServlet extends HttpServlet {
 
             Document proposal = proposalsCollection.find(eq("_id", new ObjectId(proposalId))).first();
             if (proposal != null) {
-                JSONObject proposalJson = new JSONObject(proposal.toJson());
-
+                JSONObject proposalJson = new JSONObject();
                 // Convert '_id' to 'id'
-                String id = proposal.getObjectId("_id").toHexString();
-                proposalJson.put("id", id);
-                proposalJson.remove("_id");
+                proposalJson.put("id", proposal.getObjectId("_id").toHexString());
+                // Client-side code is responsible for HTML escaping this value if rendered in HTML to prevent XSS.
+                proposalJson.put("title", proposal.getString("title")); 
+                // Client-side code is responsible for HTML escaping this value if rendered in HTML to prevent XSS.
+                proposalJson.put("party", proposal.getString("party")); 
+                // Add other fields from 'proposal' document as needed, ensuring to respect original structure
+                // For example, if proposal.toJson() included other fields, add them explicitly too.
+                // This example assumes only id, title, and party were directly relevant for this specific transformation.
+                // If other fields from proposal.toJson() are expected by client, they must be added here.
+                // For instance:
+                proposalJson.put("proposalNumber", proposal.getInteger("proposalNumber"));
+                proposalJson.put("isPriority", proposal.getBoolean("isPriority"));
+                proposalJson.put("isConstitutional", proposal.getBoolean("isConstitutional"));
+                proposalJson.put("voteRequirement", proposal.getString("voteRequirement"));
+                proposalJson.put("stupid", proposal.getBoolean("stupid"));
+                proposalJson.put("associationType", proposal.getString("associationType"));
+                proposalJson.put("referencedProposal", proposal.getString("referencedProposal"));
+                proposalJson.put("proposalVisual", proposal.getString("proposalVisual"));
+                proposalJson.put("meetingNumber", proposal.getInteger("meetingNumber"));
+                proposalJson.put("passed", proposal.getBoolean("passed"));
+                proposalJson.put("totalFor", proposal.getInteger("totalFor"));
+                proposalJson.put("totalAgainst", proposal.getInteger("totalAgainst"));
+                proposalJson.put("votingEnded", proposal.getBoolean("votingEnded"));
+
 
                 response.setContentType("application/json");
                 response.getWriter().write(proposalJson.toString());
@@ -271,6 +295,7 @@ public class ParliamentServlet extends HttpServlet {
 
             response.setStatus(HttpServletResponse.SC_CREATED);
             JSONObject resp = new JSONObject();
+            // Client-side code is responsible for HTML escaping this value if rendered in HTML to prevent XSS.
             resp.put("message", "Registration successful. Please log in.");
             response.setContentType("application/json");
             response.getWriter().write(resp.toString());
@@ -480,6 +505,7 @@ public class ParliamentServlet extends HttpServlet {
 
                     response.setStatus(HttpServletResponse.SC_OK);
                     JSONObject resp = new JSONObject();
+                    // Client-side code is responsible for HTML escaping this value if rendered in HTML to prevent XSS.
                     resp.put("message", "Login successful.");
                     resp.put(CsrfFilter.CSRF_TOKEN_SESSION_ATTR_NAME, csrfToken); // Send token to client
                     response.setContentType("application/json");
@@ -503,10 +529,19 @@ public class ParliamentServlet extends HttpServlet {
             String username = (String) session.getAttribute("username");
             Document userDoc = usersCollection.find(eq("username", username)).first();
             if (userDoc != null) {
-                JSONObject userJson = new JSONObject(userDoc.toJson());
+                JSONObject userJson = new JSONObject();
                 userJson.put("id", userDoc.getObjectId("_id").toHexString());
-                userJson.remove("_id");
-                userJson.remove("password"); // remove sensitive data
+                // Client-side code is responsible for HTML escaping these values if rendered in HTML to prevent XSS.
+                userJson.put("username", userDoc.getString("username"));
+                userJson.put("role", userDoc.getString("role"));
+                userJson.put("partyAffiliation", userDoc.getString("partyAffiliation"));
+                
+                // Add other non-sensitive fields as needed
+                userJson.put("present", userDoc.getBoolean("present", false));
+                userJson.put("seatStatus", userDoc.getString("seatStatus"));
+                userJson.put("fines", userDoc.getInteger("fines", 0));
+                userJson.put("electoralStrength", userDoc.getInteger("electoralStrength",1));
+                // userJson.remove("password"); // Not needed as we are selectively adding
 
                 // Retrieve CSRF token from session and add to response
                 String sessionToken = (String) session.getAttribute(CsrfFilter.CSRF_TOKEN_SESSION_ATTR_NAME);
@@ -607,10 +642,19 @@ public class ParliamentServlet extends HttpServlet {
                     sb.append(line);
                 }
                 JSONObject statusUpdateJson = new JSONObject(sb.toString()); // Renamed for clarity
-                String userId = statusUpdateJson.getString("id");
+                String userIdStr = statusUpdateJson.getString("id");
                 String newStatus = statusUpdateJson.getString("seatStatus");
 
-                Document query = new Document("_id", new ObjectId(userId));
+                ObjectId userObjectId;
+                try {
+                    userObjectId = new ObjectId(userIdStr);
+                } catch (IllegalArgumentException e) {
+                    logger.warn("Invalid user ID format '{}' in handleUpdateStatus.", userIdStr);
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid user ID format.");
+                    return;
+                }
+
+                Document query = new Document("_id", userObjectId);
                 Document userDoc = usersCollection.find(query).first();
 
                 if (userDoc != null) {
@@ -656,7 +700,7 @@ public class ParliamentServlet extends HttpServlet {
                     logger.info("User '{}' updated seat status of '{}' to '{}'. Returned updated user data.", requesterUsername, targetUsername, newStatus);
                 } else {
                     response.sendError(HttpServletResponse.SC_NOT_FOUND, "User not found.");
-                    logger.warn("User with ID '{}' not found.", userId);
+                    logger.warn("User with ID '{}' not found.", userIdStr);
                 }
             } else {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
@@ -752,6 +796,7 @@ public class ParliamentServlet extends HttpServlet {
 
                     response.setStatus(HttpServletResponse.SC_OK);
                     JSONObject resp = new JSONObject();
+                    // Client-side code is responsible for HTML escaping this value if rendered in HTML to prevent XSS.
                     resp.put("message", "New proposal added successfully.");
                     response.setContentType("application/json");
                     response.getWriter().write(resp.toString());
@@ -769,17 +814,35 @@ public class ParliamentServlet extends HttpServlet {
         }
     }
 
-    private int getNextConstitutionalProposalNumber() {
-        Document lastProposal = proposalsCollection.find(Filters.eq("isConstitutional", true))
-                .sort(Sorts.descending("proposalNumber"))
-                .limit(1)
-                .first();
-        if (lastProposal == null) {
-            return 1;
-        } else {
-            int lastNum = lastProposal.getInteger("proposalNumber", 0);
-            return lastNum + 1;
+    private int getNextAtomicProposalNumber(String counterName) {
+        Document query = new Document("_id", counterName);
+        // Increment the sequence_value by 1. If the field doesn't exist, $inc creates it and sets it to 1.
+        Document update = new Document("$inc", new Document("sequence_value", 1));
+        
+        FindOneAndUpdateOptions options = new FindOneAndUpdateOptions()
+                .upsert(true) // Create the document if it doesn't exist
+                .returnDocument(ReturnDocument.AFTER); // Return the document after the update
+
+        Document result = proposalCountersCollection.findOneAndUpdate(query, update, options);
+
+        if (result == null) {
+            // This should ideally not happen with upsert=true and ReturnDocument.AFTER
+            // if Mongo itself has an issue or there's a misconfiguration.
+            logger.error("CRITICAL: findOneAndUpdate with upsert=true returned null for counter '{}'. This indicates a potential issue with MongoDB or driver configuration.", counterName);
+            // Fallback strategy: attempt a direct read. If it was just created, it should be there.
+            Document fallbackResult = proposalCountersCollection.find(Filters.eq("_id", counterName)).first();
+            if (fallbackResult != null && fallbackResult.getInteger("sequence_value") != null) {
+                 logger.warn("Fallback read succeeded for counter '{}'.", counterName);
+                 return fallbackResult.getInteger("sequence_value");
+            }
+            // If we reach here, something is seriously wrong.
+            throw new RuntimeException("Failed to retrieve or initialize proposal counter for '" + counterName + "' even after fallback.");
         }
+        return result.getInteger("sequence_value");
+    }
+
+    private int getNextConstitutionalProposalNumber() {
+        return getNextAtomicProposalNumber("constitutionalProposal");
     }
 
     // Handle submitting a vote
@@ -797,7 +860,7 @@ public class ParliamentServlet extends HttpServlet {
                     sb.append(line);
                 }
                 JSONObject voteJson = new JSONObject(sb.toString());
-                String proposalId = voteJson.getString("proposalId");
+                String proposalIdStr = voteJson.getString("proposalId");
                 String voteChoice = voteJson.getString("voteChoice");
 
                 if (!Arrays.asList("For", "Against", "Abstain").contains(voteChoice)) {
@@ -806,7 +869,18 @@ public class ParliamentServlet extends HttpServlet {
                     return;
                 }
 
-                Document proposal = proposalsCollection.find(eq("_id", new ObjectId(proposalId))).first();
+                ObjectId proposalObjectId;
+                ObjectId userObjectIdFromString; 
+                try {
+                    proposalObjectId = new ObjectId(proposalIdStr); 
+                    userObjectIdFromString = new ObjectId(userId); // userId is from session attribute
+                } catch (IllegalArgumentException e) {
+                    logger.warn("Invalid ObjectId format. Proposal ID: '{}', User ID from session: '{}'. Error: {}", proposalIdStr, userId, e.getMessage());
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid ID format provided.");
+                    return;
+                }
+
+                Document proposal = proposalsCollection.find(eq("_id", proposalObjectId)).first();
                 if (proposal == null || proposal.getBoolean("votingEnded", false)) {
                     response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal or voting has ended.");
                     return;
@@ -817,15 +891,15 @@ public class ParliamentServlet extends HttpServlet {
                     return;
                 }
 
-                Document voteRecord = new Document("proposalId", new ObjectId(proposalId))
-                        .append("userId", new ObjectId(userId))
+                Document voteRecord = new Document("proposalId", proposalObjectId)
+                        .append("userId", userObjectIdFromString)
                         .append("username", username)
                         .append("voteChoice", voteChoice)
                         .append("electoralStrength", electoralStrength)
                         .append("timestamp", new Date());
 
                 votesCollection.updateOne(
-                        Filters.and(eq("proposalId", new ObjectId(proposalId)), eq("userId", new ObjectId(userId))),
+                        Filters.and(eq("proposalId", proposalObjectId), eq("userId", userObjectIdFromString)),
                         new Document("$set", voteRecord),
                         new UpdateOptions().upsert(true)
                 );
@@ -835,7 +909,7 @@ public class ParliamentServlet extends HttpServlet {
                 resp.put("message", "Vote submitted successfully.");
                 response.setContentType("application/json");
                 response.getWriter().write(resp.toString());
-                logger.info("User '{}' voted on proposal '{}': '{}'", username, proposalId, voteChoice);
+                logger.info("User '{}' voted on proposal '{}': '{}'", username, proposalIdStr, voteChoice);
             } else {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
                 logger.warn("Unauthenticated attempt to submit a vote.");
@@ -1177,7 +1251,7 @@ public class ParliamentServlet extends HttpServlet {
             List<Document> presentUsers = usersCollection.find(eq("present", true)).into(new ArrayList<>());
             // Fetch the chairman/president
             Document chairman = usersCollection.find(eq("role", "PRESIDENT")).first();
-            String chairmanName = (chairman != null) ? chairman.getString("username") : "N/A";
+            String chairmanName = (chairman != null) ? escapeDiscordMarkdown(chairman.getString("username")) : "N/A";
 
             // -----------------------
             // Build the main message
@@ -1194,8 +1268,8 @@ public class ParliamentServlet extends HttpServlet {
             // "Docházka:"
             msg.append("Docházka:\n");
             for (Document user : presentUsers) {
-                String username = user.getString("username");
-                String party = user.getString("partyAffiliation");
+                String username = escapeDiscordMarkdown(user.getString("username"));
+                String party = escapeDiscordMarkdown(user.getString("partyAffiliation"));
                 int es = user.getInteger("electoralStrength", 0);
 
                 // e.g. "**32** - MNSB - **PanNuggetek**"
@@ -1210,26 +1284,26 @@ public class ParliamentServlet extends HttpServlet {
             // ---------------------------------------
             for (Document p : priorityProposals) {
                 boolean passed = p.getBoolean("passed", false);
-                int totalFor = p.getInteger("totalFor", 0);
-                int totalAgainst = p.getInteger("totalAgainst", 0);
+                // int totalFor = p.getInteger("totalFor", 0); // Not directly used in message
+                // int totalAgainst = p.getInteger("totalAgainst", 0); // Not directly used in message
 
                 String resultEmoji = passed ? "✅" : "❌";
-                String proposalVisual = p.getString("proposalVisual"); // e.g. "P1", "P2", etc.
-                String party = p.getString("party");
-                String title = p.getString("title");
+                String proposalVisual = escapeDiscordMarkdown(p.getString("proposalVisual"));
+                String party = escapeDiscordMarkdown(p.getString("party"));
+                String title = escapeDiscordMarkdown(p.getString("title"));
                 boolean isStupid = p.getBoolean("stupid", false);
 
-                // If "stupid", apply strikethrough
+                // If "stupid", apply strikethrough AFTER escaping
                 if (isStupid) {
                     title = "~~" + title + "~~";
                 }
 
                 // e.g.: "✅ **P1 VSP:** Title..."
                 msg.append(resultEmoji).append(" **")
-                        .append(proposalVisual).append(" ")
-                        .append((party != null && !party.isEmpty()) ? party : "/")
+                        .append(proposalVisual).append(" ") // Already escaped
+                        .append((party != null && !party.isEmpty()) ? party : "/") // Already escaped
                         .append(":** ")
-                        .append(title)
+                        .append(title) // Already escaped and potentially strikethroughed
                         .append("\n");
             }
 
@@ -1238,25 +1312,26 @@ public class ParliamentServlet extends HttpServlet {
             // ---------------------------------------
             for (Document p : normalProposals) {
                 boolean passed = p.getBoolean("passed", false);
-                int totalFor = p.getInteger("totalFor", 0);
-                int totalAgainst = p.getInteger("totalAgainst", 0);
+                // int totalFor = p.getInteger("totalFor", 0); // Not directly used in message
+                // int totalAgainst = p.getInteger("totalAgainst", 0); // Not directly used in message
 
                 String resultEmoji = passed ? "✅" : "❌";
-                String proposalVisual = p.getString("proposalVisual"); // e.g. "01", "02", etc.
-                String party = p.getString("party");
-                String title = p.getString("title");
+                String proposalVisual = escapeDiscordMarkdown(p.getString("proposalVisual"));
+                String party = escapeDiscordMarkdown(p.getString("party"));
+                String title = escapeDiscordMarkdown(p.getString("title"));
                 boolean isStupid = p.getBoolean("stupid", false);
 
+                // If "stupid", apply strikethrough AFTER escaping
                 if (isStupid) {
                     title = "~~" + title + "~~";
                 }
 
                 // e.g.: "✅ **01 VSP:** Title..."
                 msg.append(resultEmoji).append(" **")
-                        .append(proposalVisual).append(" ")
-                        .append((party != null && !party.isEmpty()) ? party : "/")
+                        .append(proposalVisual).append(" ") // Already escaped
+                        .append((party != null && !party.isEmpty()) ? party : "/") // Already escaped
                         .append(":** ")
-                        .append(title)
+                        .append(title) // Already escaped and potentially strikethroughed
                         .append("\n");
             }
 
@@ -1274,9 +1349,9 @@ public class ParliamentServlet extends HttpServlet {
             } else {
                 // Example: "50 b.ch. - PanNuggetek (Reason: disruption)"
                 for (Document fineDoc : meetingFines) {
-                    String finedUser = fineDoc.getString("username");
+                    String finedUser = escapeDiscordMarkdown(fineDoc.getString("username"));
                     int amount = fineDoc.getInteger("amount", 0);
-                    String reason = fineDoc.getString("reason");
+                    String reason = escapeDiscordMarkdown(fineDoc.getString("reason"));
                     msg.append(amount).append(" b.ch. - ").append(finedUser)
                             .append(" (").append(reason).append(")\n");
                 }
@@ -1461,13 +1536,21 @@ public class ParliamentServlet extends HttpServlet {
 
                 for (int i = 0; i < userUpdates.length(); i++) {
                     JSONObject userUpdate = userUpdates.getJSONObject(i);
-                    String userId = userUpdate.getString("id");
+                    String userIdStr = userUpdate.getString("id");
                     int electoralStrength = userUpdate.optInt("electoralStrength", 1);
                     String partyAffiliation = userUpdate.optString("partyAffiliation", "");
                     String role = userUpdate.optString("role", "MEMBER");
 
+                    ObjectId userObjectId;
+                    try {
+                        userObjectId = new ObjectId(userIdStr);
+                    } catch (IllegalArgumentException e) {
+                        logger.warn("Invalid user ID format '{}' in handleUpdateUsers. Skipping update for this user.", userIdStr);
+                        continue; // Skip to the next user in the loop
+                    }
+
                     if (!Arrays.asList("MEMBER", "PRESIDENT", "OTHER_ROLE").contains(role)) {
-                        logger.warn("Invalid role '{}' for user ID '{}'. Skipping update.", role, userId);
+                        logger.warn("Invalid role '{}' for user ID '{}'. Skipping update.", role, userIdStr);
                         continue;
                     }
 
@@ -1477,7 +1560,7 @@ public class ParliamentServlet extends HttpServlet {
                             .append("role", role);
 
                     usersCollection.updateOne(
-                            eq("_id", new ObjectId(userId)),
+                            eq("_id", userObjectId),
                             new Document("$set", updateFields)
                     );
                 }
@@ -1666,10 +1749,19 @@ public class ParliamentServlet extends HttpServlet {
 
             JSONArray usersArray = new JSONArray();
             for (Document doc : users) {
-                JSONObject userJson = new JSONObject(doc.toJson());
-                userJson.remove("password");
+                JSONObject userJson = new JSONObject();
                 userJson.put("id", doc.getObjectId("_id").toHexString());
-                userJson.remove("_id");
+                // Client-side code is responsible for HTML escaping these values if rendered in HTML to prevent XSS.
+                userJson.put("username", doc.getString("username"));
+                userJson.put("role", doc.getString("role"));
+                userJson.put("partyAffiliation", doc.getString("partyAffiliation"));
+                
+                // Add other non-sensitive fields as needed
+                userJson.put("present", doc.getBoolean("present", false));
+                userJson.put("seatStatus", doc.getString("seatStatus"));
+                userJson.put("fines", doc.getInteger("fines", 0));
+                userJson.put("electoralStrength", doc.getInteger("electoralStrength",1));
+                // userJson.remove("password"); // Not needed as we are selectively adding
 
                 String seatStatus = doc.getString("seatStatus");
                 userJson.put("seatStatus", seatStatus != null ? seatStatus : "NEUTRAL");
@@ -1688,25 +1780,64 @@ public class ParliamentServlet extends HttpServlet {
 
     private void handleGetUserById(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
-            String userId = request.getPathInfo().split("/")[2];
+            HttpSession session = request.getSession(false);
+            String sessionUserId = null;
+            String sessionUserRole = null;
+            String sessionUsername = null; // For logging
 
-            Document userDoc = usersCollection.find(eq("_id", new ObjectId(userId))).first();
+            if (session != null) {
+                sessionUserId = (String) session.getAttribute("userId");
+                sessionUserRole = (String) session.getAttribute("role");
+                sessionUsername = (String) session.getAttribute("username"); // For logging
+            }
+
+            if (sessionUserId == null) { // Also implies sessionUserRole would be null
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
+                logger.warn("Unauthenticated attempt to get user by ID.");
+                return;
+            }
+
+            String targetUserIdFromPath = request.getPathInfo().split("/")[2];
+
+            boolean allowed = false;
+            if (targetUserIdFromPath.equals(sessionUserId)) {
+                allowed = true; // User is requesting their own information
+            } else if ("PRESIDENT".equals(sessionUserRole)) {
+                allowed = true; // President can view any user
+            }
+
+            if (!allowed) {
+                response.sendError(HttpServletResponse.SC_FORBIDDEN, "Access denied to user information.");
+                logger.warn("User '{}' (Role: '{}') denied access to user ID '{}'.", sessionUsername, sessionUserRole, targetUserIdFromPath);
+                return;
+            }
+
+            Document userDoc = usersCollection.find(eq("_id", new ObjectId(targetUserIdFromPath))).first();
 
             if (userDoc != null) {
-                JSONObject userJson = new JSONObject(userDoc.toJson());
-                userJson.remove("password");
+                JSONObject userJson = new JSONObject();
                 userJson.put("id", userDoc.getObjectId("_id").toHexString());
-                userJson.remove("_id");
+                // Client-side code is responsible for HTML escaping these values if rendered in HTML to prevent XSS.
+                userJson.put("username", userDoc.getString("username"));
+                userJson.put("role", userDoc.getString("role"));
+                userJson.put("partyAffiliation", userDoc.getString("partyAffiliation"));
 
+                // Add other non-sensitive fields as needed
+                userJson.put("present", userDoc.getBoolean("present", false));
+                userJson.put("seatStatus", userDoc.getString("seatStatus"));
+                userJson.put("fines", userDoc.getInteger("fines", 0));
+                userJson.put("electoralStrength", userDoc.getInteger("electoralStrength",1));
+                // userJson.remove("password"); // Not needed as we are selectively adding
+                
                 String seatStatus = userDoc.getString("seatStatus");
                 userJson.put("seatStatus", seatStatus != null ? seatStatus : "NEUTRAL");
 
                 response.setContentType("application/json");
                 response.getWriter().write(userJson.toString());
-                logger.info("Fetched user with id '{}'.", userId);
+                logger.info("User '{}' (Role: '{}') fetched user with id '{}'.", sessionUsername, sessionUserRole, targetUserIdFromPath);
             } else {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND, "User not found.");
-                logger.warn("User with id '{}' not found.", userId);
+                logger.warn("User with id '{}' not found (requested by User '{}', Role: '{}').", targetUserIdFromPath, sessionUsername, sessionUserRole);
             }
         } catch (IllegalArgumentException e) {
             logger.error("Invalid user ID format: {}", e.getMessage());
@@ -1730,11 +1861,22 @@ public class ParliamentServlet extends HttpServlet {
 
             JSONArray proposalsArray = new JSONArray();
             for (Document doc : proposals) {
-                JSONObject proposalJson = new JSONObject(doc.toJson());
+                JSONObject proposalJson = new JSONObject();
+                proposalJson.put("id", doc.getObjectId("_id").toHexString());
+                // Client-side code is responsible for HTML escaping these values if rendered in HTML to prevent XSS.
+                proposalJson.put("title", doc.getString("title"));
+                proposalJson.put("party", doc.getString("party"));
+                // Add other fields from 'doc' as needed, respecting original structure
+                proposalJson.put("proposalNumber", doc.getInteger("proposalNumber"));
+                proposalJson.put("isPriority", doc.getBoolean("isPriority"));
+                proposalJson.put("isConstitutional", doc.getBoolean("isConstitutional"));
+                proposalJson.put("voteRequirement", doc.getString("voteRequirement"));
+                proposalJson.put("stupid", doc.getBoolean("stupid"));
+                proposalJson.put("associationType", doc.getString("associationType"));
+                proposalJson.put("referencedProposal", doc.getString("referencedProposal"));
+                proposalJson.put("proposalVisual", doc.getString("proposalVisual"));
+                proposalJson.put("meetingNumber", doc.getInteger("meetingNumber"));
 
-                String id = doc.getObjectId("_id").toHexString();
-                proposalJson.put("id", id);
-                proposalJson.remove("_id");
 
                 if (doc.getBoolean("votingEnded", false)) {
                     proposalJson.put("passed", doc.getBoolean("passed", false));
@@ -1743,17 +1885,26 @@ public class ParliamentServlet extends HttpServlet {
                 }
 
                 if (userId != null) {
-                    Document vote = votesCollection.find(Filters.and(
-                            eq("proposalId", doc.getObjectId("_id")),
-                            eq("userId", new ObjectId(userId))
-                    )).first();
-                    if (vote != null) {
-                        proposalJson.put("userVote", vote.getString("voteChoice"));
-                    } else {
-                        proposalJson.put("userVote", "Abstain");
+                    try {
+                        ObjectId userObjectId = new ObjectId(userId); // userId is from session
+                        Document vote = votesCollection.find(Filters.and(
+                                eq("proposalId", doc.getObjectId("_id")), // doc.getObjectId already returns ObjectId
+                                eq("userId", userObjectId)
+                        )).first();
+                        if (vote != null) {
+                            // Client-side code is responsible for HTML escaping this value if rendered in HTML to prevent XSS.
+                            proposalJson.put("userVote", vote.getString("voteChoice"));
+                        } else {
+                            proposalJson.put("userVote", "Abstain"); // Default if no vote found
+                        }
+                    } catch (IllegalArgumentException e) {
+                        logger.warn("Invalid userId '{}' found in session during handleGetProposals. Skipping user vote for this proposal.", userId);
+                        // No user-supplied string here, just a default
+                        proposalJson.put("userVote", "Abstain"); // Or some other indicator of an issue
                     }
                 } else {
-                    proposalJson.put("userVote", "Abstain");
+                     // No user-supplied string here, just a default
+                    proposalJson.put("userVote", "Abstain"); // Default for non-authenticated users
                 }
 
                 proposalsArray.put(proposalJson);
@@ -1794,21 +1945,29 @@ public class ParliamentServlet extends HttpServlet {
 
     // Helper to get next proposal number
     private int getNextProposalNumber(Boolean priority) {
-        // We'll only look at proposals with isPriority == `priority`.
-        // Sort them descending by "proposalNumber" to find the largest used number.
-        Document lastProposal = proposalsCollection
-                .find(eq("isPriority", priority))
-                .sort(Sorts.descending("proposalNumber"))
-                .limit(1)
-                .first();
+        String counterName = priority ? "priorityProposal" : "normalProposal";
+        return getNextAtomicProposalNumber(counterName);
+    }
 
-        if (lastProposal == null) {
-            // No proposals exist in this category (priority/normal) yet, start at 1
-            return 1;
-        } else {
-            int lastNum = lastProposal.getInteger("proposalNumber", 0);
-            // Next free number
-            return lastNum + 1;
+    private String escapeDiscordMarkdown(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
         }
+        // Characters to escape: \, *, _, ~, `, ||, >, #, -, +, .
+        // Order can matter if replacements create new sequences.
+        // Generally, escaping the escape character itself first is safest if it's also a special char.
+        // For Discord, we just need to prefix special chars with a backslash.
+        return text
+            .replace("\\", "\\\\") // Replace \ with \\ (becomes \ in output)
+            .replace("*", "\\*")   // Replace * with \*
+            .replace("_", "\\_")   // Replace _ with \_
+            .replace("~", "\\~")   // Replace ~ with \~
+            .replace("`", "\\`")   // Replace ` with \`
+            .replace("||", "\\|\\|") // Replace || with \||
+            .replace(">", "\\>")   // Replace > with \>
+            .replace("#", "\\#")   // Replace # with \#
+            .replace("-", "\\-")   // Replace - with \- (especially at start of lines)
+            .replace("+", "\\+")   // Replace + with \+ (especially at start of lines)
+            .replace(".", "\\.");    // Replace . with \. (especially after numbers for lists)
     }
 }

@@ -3,7 +3,7 @@ package com.example;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
-import org.mindrot.jbcrypt.BCrypt;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,6 +16,7 @@ public class MongoDBConnection {
 
     private static MongoClient mongoClient = null;
     private static MongoDatabase database = null;
+    private static final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     // Initialize the MongoDB connection
     public static synchronized MongoDatabase getDatabase() {
@@ -39,7 +40,7 @@ public class MongoDBConnection {
 
     // Hash a plain-text password using BCrypt
     public static String hashPassword(String plainPassword) {
-        return BCrypt.hashpw(plainPassword, BCrypt.gensalt());
+        return passwordEncoder.encode(plainPassword);
     }
 
     // Verify a plain-text password against a hashed password
@@ -47,7 +48,7 @@ public class MongoDBConnection {
         if (plainPassword == null || hashedPassword == null) {
             return false;
         }
-        return BCrypt.checkpw(plainPassword, hashedPassword);
+        return passwordEncoder.matches(plainPassword, hashedPassword);
     }
 
     // Close the MongoDB connection
