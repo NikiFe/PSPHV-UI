@@ -39,6 +39,8 @@ public class ParliamentServlet extends HttpServlet {
     private final MongoCollection<Document> fineReasonsCollection;
     private final MongoCollection<Document> systemParametersCollection;
     private final MongoCollection<Document> proposalCountersCollection;
+    private final MongoCollection<Document> pendingProposalsCollection;
+    private final MongoCollection<Document> parliamentQueueCollection;
 
     private String discordWebhookUrl;
 
@@ -51,6 +53,8 @@ public class ParliamentServlet extends HttpServlet {
         this.fineReasonsCollection = database.getCollection("fineReasons");
         this.systemParametersCollection = database.getCollection("systemParameters");
         this.proposalCountersCollection = database.getCollection("proposalCounters");
+        this.pendingProposalsCollection = database.getCollection("pendingProposals");
+        this.parliamentQueueCollection = database.getCollection("parliamentQueue");
 
         // Ensure break status is initialized if missing
         initializeBreakStatus();
@@ -160,9 +164,52 @@ public class ParliamentServlet extends HttpServlet {
             case "/users/update":
                 handleUpdateUsers(request, response);
                 break;
+            case "/proposals/submit":
+                handlePlayerSubmitProposal(request, response);
+                break;
+            case "/queue/request-speak":
+                handleRequestSpeak(request, response);
+                break;
             default:
-                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
-                logger.warn("Unknown POST endpoint: {}", path);
+                if (path != null && path.startsWith("/proposals/pending/")) {
+                    String[] parts = path.split("/");
+                    if (parts.length == 5 && "pending".equals(parts[2])) { // /proposals/pending/{id}/action
+                        String pendingProposalId = parts[3];
+                        String action = parts[4];
+                        if ("approve".equals(action)) {
+                            handleApprovePendingProposal(request, response, pendingProposalId);
+                        } else if ("reject".equals(action)) {
+                            handleRejectPendingProposal(request, response, pendingProposalId);
+                        } else {
+                            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid action for pending proposal.");
+                            logger.warn("Invalid action '{}' for pending proposal ID '{}'.", action, pendingProposalId);
+                        }
+                    } else {
+                        response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
+                        logger.warn("Unknown POST endpoint structure for /proposals/pending/: {}", path);
+                    }
+                } else if (path != null && path.startsWith("/queue/set-active/")) {
+                    String[] parts = path.split("/");
+                    if (parts.length == 4) { // /queue/set-active/{itemId}
+                        String itemId = parts[3];
+                        handleQueueSetActive(request, response, itemId);
+                    } else {
+                         response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
+                         logger.warn("Unknown POST endpoint structure for /queue/set-active/: {}", path);
+                    }
+                } else if (path != null && path.startsWith("/queue/complete-active/")) {
+                    String[] parts = path.split("/");
+                    if (parts.length == 4) { // /queue/complete-active/{itemId}
+                        String itemId = parts[3];
+                        handleQueueCompleteActive(request, response, itemId);
+                    } else {
+                        response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
+                        logger.warn("Unknown POST endpoint structure for /queue/complete-active/: {}", path);
+                    }
+                } else {
+                    response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
+                    logger.warn("Unknown POST endpoint: {}", path);
+                }
                 break;
         }
     }
@@ -186,6 +233,10 @@ public class ParliamentServlet extends HttpServlet {
                 handleGetQueue(request, response);
             } else if (path.equals("/system/break-status")) {
                 handleGetBreakStatus(request, response);
+            } else if (path.equals("/proposals/pending")) {
+                handleGetPendingProposals(request, response);
+            } else if (path.equals("/parliament-queue/view")) {
+                handleGetParliamentQueue(request, response);
             } else {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND, "Endpoint not found.");
                 logger.warn("Unknown GET endpoint: {}", path);
@@ -678,6 +729,49 @@ public class ParliamentServlet extends HttpServlet {
                     Document update = new Document("$set", new Document("seatStatus", newStatus).append("present", true));
                     usersCollection.updateOne(query, update);
 
+                    // Handle queue updates for objections
+                    if ("OBJECTING".equals(newStatus)) {
+                        // Remove any pending speaker requests for this user
+                        parliamentQueueCollection.deleteMany(Filters.and(
+                            Filters.eq("userId", userObjectId),
+                            Filters.eq("type", "SPEAKER_REQUEST"),
+                            Filters.eq("status", "pending")
+                        ));
+                        logger.info("Removed pending SPEAKER_REQUEST for user '{}' due to new OBJECTION.", targetUsername);
+
+                        // Upsert an objection item
+                        Document objectionQuery = Filters.and(
+                            Filters.eq("userId", userObjectId),
+                            Filters.eq("type", "OBJECTION") 
+                        );
+                        Document objectionUpdate = new Document("$set", new Document("username", targetUsername) // XSS: Client responsible for escaping
+                                                                    .append("timestamp", new Date())
+                                                                    .append("priority", 1) // Highest priority for objections
+                                                                    .append("status", "pending"))
+                                                    .append("$setOnInsert", new Document("userId", userObjectId).append("type", "OBJECTION"));
+                        UpdateOptions options = new UpdateOptions().upsert(true);
+                        parliamentQueueCollection.updateOne(objectionQuery, objectionUpdate, options);
+                        logger.info("Upserted OBJECTION for user '{}' into queue.", targetUsername);
+                        broadcastQueueUpdate(); // Ensure queue is updated
+                    } else if ("OBJECTING".equals(currentSeatStatus) && !"OBJECTING".equals(newStatus) && "PRESIDENT".equals(requesterRole)) {
+                        // President changed status from OBJECTING to something else (e.g., NEUTRAL, SPEAKING)
+                        // Note: If changing to SPEAKING because they were selected from queue, handleQueueSetActive will manage it.
+                        // This handles direct cancellation by President.
+                        Document objectionQuery = Filters.and(
+                            Filters.eq("userId", userObjectId),
+                            Filters.eq("type", "OBJECTION"),
+                            Filters.eq("status", "pending") // Only affect pending objections
+                        );
+                        Document objectionUpdate = new Document("$set", new Document("status", "completed")
+                                                                    .append("completedTimestamp", new Date()));
+                        var result = parliamentQueueCollection.updateOne(objectionQuery, objectionUpdate);
+                        if (result.getModifiedCount() > 0) {
+                           logger.info("President '{}' changed status of user '{}' from OBJECTION. Objection queue item marked completed.", requesterUsername, targetUsername);
+                           broadcastQueueUpdate();
+                        }
+                    }
+
+
                     Document updatedUserDoc = usersCollection.find(query).first();
                     JSONObject userJsonForResponse = new JSONObject(updatedUserDoc.toJson());
                     userJsonForResponse.put("id", updatedUserDoc.getObjectId("_id").toHexString());
@@ -801,6 +895,7 @@ public class ParliamentServlet extends HttpServlet {
                     response.setContentType("application/json");
                     response.getWriter().write(resp.toString());
                     logger.info("President added new proposal: '{}'", title);
+                    repopulateProposalQueue(); 
                 } else {
                     response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to retrieve inserted proposal.");
                 }
@@ -958,6 +1053,7 @@ public class ParliamentServlet extends HttpServlet {
 
                 sendVotingResultsToDiscord();
                 incrementMeetingNumber();
+                repopulateProposalQueue(); // Call to repopulate and broadcast queue
 
                 response.setStatus(HttpServletResponse.SC_OK);
                 JSONObject resp = new JSONObject();
@@ -1008,6 +1104,7 @@ public class ParliamentServlet extends HttpServlet {
                 JSONObject updateMsg = new JSONObject().put("type", "proposalsUpdated");
                 SeatWebSocket.broadcast(updateMsg);
                 logger.info("Broadcasted proposalsUpdated after ending priority voting.");
+                repopulateProposalQueue(); // Call to repopulate and broadcast queue
 
                 response.setStatus(HttpServletResponse.SC_OK);
                 JSONObject resp = new JSONObject();
@@ -1053,6 +1150,7 @@ public class ParliamentServlet extends HttpServlet {
                 JSONObject updateMsg = new JSONObject().put("type", "proposalsUpdated");
                 SeatWebSocket.broadcast(updateMsg);
                 logger.info("Broadcasted proposalsUpdated after ending constitutional voting.");
+                repopulateProposalQueue(); // Call to repopulate and broadcast queue
                 
                 response.setStatus(HttpServletResponse.SC_OK);
                 JSONObject resp = new JSONObject();
@@ -1949,6 +2047,89 @@ public class ParliamentServlet extends HttpServlet {
         return getNextAtomicProposalNumber(counterName);
     }
 
+    // Handles player-submitted proposals
+    private void handlePlayerSubmitProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        HttpSession session = request.getSession(false);
+        if (session == null || session.getAttribute("userId") == null) {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
+            logger.warn("Unauthenticated attempt to submit a proposal.");
+            return;
+        }
+
+        String sessionUserId = (String) session.getAttribute("userId");
+        String sessionUsername = (String) session.getAttribute("username");
+
+        try {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = request.getReader().readLine()) != null) {
+                sb.append(line);
+            }
+            JSONObject proposalJson = new JSONObject(sb.toString());
+
+            String title = proposalJson.optString("title", "").trim();
+            String description = proposalJson.optString("description", "").trim();
+
+            if (title.isEmpty()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal title cannot be empty.");
+                logger.warn("User '{}' attempted to submit a proposal with an empty title.", sessionUsername);
+                return;
+            }
+            
+            // Validate sessionUserId as ObjectId
+            ObjectId userObjectId;
+            try {
+                userObjectId = new ObjectId(sessionUserId);
+            } catch (IllegalArgumentException e) {
+                logger.error("Invalid sessionUserId '{}' for user '{}'.", sessionUserId, sessionUsername, e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Invalid user session data.");
+                return;
+            }
+
+            Document pendingProposalDoc = new Document()
+                .append("submittedByUserId", userObjectId)
+                .append("submittedByUsername", sessionUsername) // XSS: Client responsible for escaping if rendered
+                .append("title", title) // XSS: Client responsible for escaping if rendered
+                .append("description", description) // XSS: Client responsible for escaping if rendered
+                .append("submissionTimestamp", new Date())
+                .append("status", "pending");
+
+            pendingProposalsCollection.insertOne(pendingProposalDoc);
+            // To get the ID, we need to fetch it. MongoDB insertOne does not return the full doc by default with all drivers/versions.
+            // However, the `pendingProposalDoc` will have the _id field populated *after* the insert.
+            ObjectId insertedId = pendingProposalDoc.getObjectId("_id");
+
+
+            response.setStatus(HttpServletResponse.SC_CREATED);
+            JSONObject resp = new JSONObject();
+            resp.put("message", "Proposal submitted successfully and is pending review.");
+            resp.put("pendingProposalId", insertedId.toHexString());
+            response.setContentType("application/json");
+            response.getWriter().write(resp.toString());
+            logger.info("User '{}' submitted proposal '{}' (ID: {}) for review.", sessionUsername, title, insertedId.toHexString());
+
+            // WebSocket Broadcast
+            JSONObject wsMessage = new JSONObject();
+            wsMessage.put("type", "pendingProposalNew");
+            JSONObject proposalData = new JSONObject();
+            proposalData.put("id", insertedId.toHexString());
+            // Client-side code is responsible for HTML escaping these values if rendered in HTML to prevent XSS.
+            proposalData.put("title", title);
+            proposalData.put("description", description);
+            proposalData.put("submittedByUsername", sessionUsername);
+            proposalData.put("submissionTimestamp", pendingProposalDoc.getDate("submissionTimestamp").toInstant().toString());
+            proposalData.put("status", "pending");
+            wsMessage.put("proposal", proposalData);
+            SeatWebSocket.broadcast(wsMessage); 
+            logger.info("Broadcasted new pending proposal notification for ID '{}'.", insertedId.toHexString());
+
+        } catch (Exception e) {
+            logger.error("Error during player proposal submission by user '{}': ", sessionUsername, e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while submitting the proposal.");
+        }
+    }
+
+
     private String escapeDiscordMarkdown(String text) {
         if (text == null || text.isEmpty()) {
             return text;
@@ -1969,5 +2150,687 @@ public class ParliamentServlet extends HttpServlet {
             .replace("-", "\\-")   // Replace - with \- (especially at start of lines)
             .replace("+", "\\+")   // Replace + with \+ (especially at start of lines)
             .replace(".", "\\.");    // Replace . with \. (especially after numbers for lists)
+    }
+
+    private void handleApprovePendingProposal(HttpServletRequest request, HttpServletResponse response, String pendingProposalIdStr) throws IOException {
+        HttpSession session = request.getSession(false);
+        if (session == null || !"PRESIDENT".equals(session.getAttribute("role"))) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "Access denied. Only the President can approve proposals.");
+            logger.warn("Non-president user '{}' attempted to approve pending proposal ID '{}'.", session != null ? session.getAttribute("username") : "unauthenticated", pendingProposalIdStr);
+            return;
+        }
+        String presidentUsername = (String) session.getAttribute("username");
+
+        ObjectId pendingProposalObjectId;
+        try {
+            pendingProposalObjectId = new ObjectId(pendingProposalIdStr);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid pending proposal ID format '{}' in handleApprovePendingProposal by President '{}'.", pendingProposalIdStr, presidentUsername);
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid pending proposal ID format.");
+            return;
+        }
+
+        try {
+            Document pendingProposalDoc = pendingProposalsCollection.find(eq("_id", pendingProposalObjectId)).first();
+
+            if (pendingProposalDoc == null) {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Pending proposal not found.");
+                logger.warn("Pending proposal ID '{}' not found for approval by President '{}'.", pendingProposalIdStr, presidentUsername);
+                return;
+            }
+
+            if (!"pending".equals(pendingProposalDoc.getString("status"))) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal is not pending and cannot be approved. Current status: " + pendingProposalDoc.getString("status"));
+                logger.warn("President '{}' attempted to approve proposal ID '{}' which is not pending (status: {}).", presidentUsername, pendingProposalIdStr, pendingProposalDoc.getString("status"));
+                return;
+            }
+
+            // For simplicity, submitted proposals become normal, non-priority, non-constitutional
+            boolean isPriority = false; 
+            boolean isConstitutional = false; 
+            String type = "normal"; 
+            String associatedProposal = ""; 
+
+            int proposalNumber;
+            String proposalVisual;
+            if (isConstitutional) {
+                proposalNumber = getNextConstitutionalProposalNumber();
+                proposalVisual = "C" + proposalNumber;
+            } else if (isPriority) {
+                proposalNumber = getNextProposalNumber(true); // True for priority
+                proposalVisual = "P" + proposalNumber;
+            } else {
+                proposalNumber = getNextProposalNumber(false); // False for normal
+                proposalVisual = String.valueOf(proposalNumber);
+            }
+
+            int meetingNumber = getCurrentMeetingNumber();
+            String party = "Submitted by " + pendingProposalDoc.getString("submittedByUsername"); 
+
+            Document mainProposalDoc = new Document("title", pendingProposalDoc.getString("title"))
+                .append("description", pendingProposalDoc.getString("description")) 
+                .append("proposalNumber", proposalNumber)
+                .append("party", party) // XSS: Client responsible for escaping party if rendered
+                .append("isPriority", isPriority)
+                .append("isConstitutional", isConstitutional)
+                .append("voteRequirement", "Rel") 
+                .append("stupid", false)
+                .append("associationType", type)
+                .append("referencedProposal", associatedProposal)
+                .append("proposalVisual", proposalVisual) // XSS: Client responsible for escaping if rendered
+                .append("meetingNumber", meetingNumber)
+                .append("passed", false)
+                .append("totalFor", 0)
+                .append("totalAgainst", 0)
+                .append("votingEnded", false)
+                .append("submittedByUsername", pendingProposalDoc.getString("submittedByUsername")) // XSS: Client responsible for escaping if rendered
+                .append("pendingProposalId", pendingProposalDoc.getObjectId("_id")); 
+            
+            proposalsCollection.insertOne(mainProposalDoc);
+            ObjectId mainProposalId = mainProposalDoc.getObjectId("_id");
+
+            // Update the original pending proposal
+            Document updatePending = new Document("$set", new Document("status", "approved")
+                                                        .append("approvedTimestamp", new Date())
+                                                        .append("mainProposalId", mainProposalId));
+            pendingProposalsCollection.updateOne(eq("_id", pendingProposalObjectId), updatePending);
+
+            // Prepare response with main proposal details
+            Document insertedProposal = proposalsCollection.find(Filters.eq("_id", mainProposalId)).first();
+            JSONObject responseJson = new JSONObject();
+            if (insertedProposal != null) {
+                 // Selectively build the JSON response for the main proposal
+                responseJson.put("id", insertedProposal.getObjectId("_id").toHexString());
+                // Client-side code is responsible for HTML escaping these values if rendered in HTML to prevent XSS.
+                responseJson.put("title", insertedProposal.getString("title"));
+                responseJson.put("description", insertedProposal.getString("description"));
+                responseJson.put("proposalNumber", insertedProposal.getInteger("proposalNumber"));
+                responseJson.put("party", insertedProposal.getString("party"));
+                responseJson.put("isPriority", insertedProposal.getBoolean("isPriority"));
+                responseJson.put("isConstitutional", insertedProposal.getBoolean("isConstitutional"));
+                responseJson.put("voteRequirement", insertedProposal.getString("voteRequirement"));
+                responseJson.put("stupid", insertedProposal.getBoolean("stupid"));
+                responseJson.put("associationType", insertedProposal.getString("associationType"));
+                responseJson.put("referencedProposal", insertedProposal.getString("referencedProposal"));
+                responseJson.put("proposalVisual", insertedProposal.getString("proposalVisual"));
+                responseJson.put("meetingNumber", insertedProposal.getInteger("meetingNumber"));
+                responseJson.put("passed", insertedProposal.getBoolean("passed", false));
+                responseJson.put("totalFor", insertedProposal.getInteger("totalFor", 0));
+                responseJson.put("totalAgainst", insertedProposal.getInteger("totalAgainst", 0));
+                responseJson.put("votingEnded", insertedProposal.getBoolean("votingEnded", false));
+                responseJson.put("submittedByUsername", insertedProposal.getString("submittedByUsername"));
+                responseJson.put("pendingProposalId", insertedProposal.getObjectId("pendingProposalId").toHexString());
+            } else {
+                 // Fallback if somehow the inserted proposal is not found immediately
+                responseJson.put("id", mainProposalId.toHexString());
+                responseJson.put("title", pendingProposalDoc.getString("title"));
+                responseJson.put("message", "Main proposal created, but full details fetch failed.");
+            }
+
+
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.setContentType("application/json");
+            response.getWriter().write(responseJson.toString());
+            logger.info("President '{}' approved pending proposal ID '{}'. New main proposal ID '{}' created.", presidentUsername, pendingProposalIdStr, mainProposalId.toHexString());
+
+            // WebSocket Broadcast for the new main proposal
+            if (insertedProposal != null) {
+                JSONObject proposalUpdateMsg = new JSONObject();
+                proposalUpdateMsg.put("type", "proposalUpdate"); // Using "proposalUpdate" as it's a new proposal being added to the main list
+                proposalUpdateMsg.put("proposal", responseJson); // Use the already constructed JSON
+                SeatWebSocket.broadcast(proposalUpdateMsg);
+                logger.info("Broadcasted new main proposal (from pending) id '{}'.", mainProposalId.toHexString());
+            }
+            
+            // WebSocket Broadcast for the updated pending proposal status
+            JSONObject pendingStatusUpdateMsg = new JSONObject();
+            pendingStatusUpdateMsg.put("type", "pendingProposalStatusUpdate");
+            JSONObject pendingData = new JSONObject();
+            pendingData.put("id", pendingProposalIdStr);
+            pendingData.put("status", "approved");
+            pendingData.put("mainProposalId", mainProposalId.toHexString());
+            pendingStatusUpdateMsg.put("proposal", pendingData);
+            SeatWebSocket.broadcast(pendingStatusUpdateMsg);
+            logger.info("Broadcasted pending proposal status update for ID '{}' to 'approved'.", pendingProposalIdStr);
+
+            repopulateProposalQueue(); // Call to repopulate and broadcast queue
+
+        } catch (Exception e) {
+            logger.error("Error during approving pending proposal ID '{}' by President '{}': ", pendingProposalIdStr, presidentUsername, e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while approving the proposal.");
+        }
+    }
+
+    // Handles fetching pending proposals for President
+    private void handleGetPendingProposals(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        HttpSession session = request.getSession(false);
+        if (session == null || !"PRESIDENT".equals(session.getAttribute("role"))) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "Access denied. Only the President can view pending proposals.");
+            logger.warn("Non-president user '{}' attempted to access pending proposals.", session != null ? session.getAttribute("username") : "unauthenticated");
+            return;
+        }
+
+        try {
+            List<Document> pendingDocs = pendingProposalsCollection.find(Filters.eq("status", "pending"))
+                                                                  .sort(Sorts.ascending("submissionTimestamp"))
+                                                                  .into(new ArrayList<>());
+            JSONArray proposalsArray = new JSONArray();
+            for (Document doc : pendingDocs) {
+                JSONObject proposalJson = new JSONObject();
+                proposalJson.put("id", doc.getObjectId("_id").toHexString());
+                // Client-side code is responsible for HTML escaping these values if rendered in HTML to prevent XSS.
+                proposalJson.put("title", doc.getString("title"));
+                proposalJson.put("description", doc.getString("description"));
+                proposalJson.put("submittedByUsername", doc.getString("submittedByUsername"));
+                proposalJson.put("submittedByUserId", doc.getObjectId("submittedByUserId").toHexString());
+                proposalJson.put("submissionTimestamp", doc.getDate("submissionTimestamp").toInstant().toString());
+                proposalJson.put("status", doc.getString("status"));
+                proposalsArray.put(proposalJson);
+            }
+
+            response.setContentType("application/json");
+            response.getWriter().write(proposalsArray.toString());
+            logger.info("President '{}' fetched {} pending proposals.", session.getAttribute("username"), pendingDocs.size());
+
+        } catch (Exception e) {
+            logger.error("Error during fetching pending proposals for President '{}': ", session.getAttribute("username"), e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while fetching pending proposals.");
+        }
+    }
+
+    private void broadcastQueueUpdate() {
+        try {
+            List<Document> queueItems = parliamentQueueCollection.find(
+                Filters.or(Filters.eq("status", "pending"), Filters.eq("status", "active"))
+            ).sort(Sorts.orderBy(Sorts.ascending("priority"), Sorts.ascending("timestamp"))).into(new ArrayList<>());
+
+            JSONArray queueJsonArray = new JSONArray();
+            for (Document item : queueItems) {
+                JSONObject queueItemJson = new JSONObject();
+                // Convert '_id' to 'id' and other fields from the document
+                queueItemJson.put("id", item.getObjectId("_id").toHexString());
+                queueItemJson.put("type", item.getString("type"));
+                queueItemJson.put("status", item.getString("status"));
+                queueItemJson.put("priority", item.getInteger("priority"));
+                queueItemJson.put("timestamp", item.getDate("timestamp").toInstant().toString());
+
+                // Add type-specific fields
+                if ("PROPOSAL_DISCUSSION".equals(item.getString("type"))) {
+                    queueItemJson.put("proposalId", item.getObjectId("proposalId").toHexString());
+                    queueItemJson.put("proposalTitle", item.getString("proposalTitle"));
+                    queueItemJson.put("proposalVisual", item.getString("proposalVisual"));
+                } else if ("SPEAKER_REQUEST".equals(item.getString("type"))) {
+                    queueItemJson.put("userId", item.getObjectId("userId").toHexString());
+                    queueItemJson.put("username", item.getString("username"));
+                    queueItemJson.put("requestType", item.getString("requestType")); // e.g., "REQUESTING_TO_SPEAK", "OBJECTING"
+                }
+                // Add other fields as necessary, ensuring they are handled if they might not exist.
+                // Example: item.get("someField", defaultValue) or check with item.containsKey("someField")
+
+                queueJsonArray.put(queueItemJson);
+            }
+
+            JSONObject message = new JSONObject();
+            message.put("type", "queueUpdate");
+            message.put("queue", queueJsonArray);
+            SeatWebSocket.broadcast(message);
+            logger.info("Broadcasted queue update with {} items.", queueItems.size());
+        } catch (Exception e) {
+            logger.error("Error broadcasting queue update: ", e);
+        }
+    }
+
+    private void repopulateProposalQueue() {
+        try {
+            // Clear existing 'pending' proposals from the queue to avoid duplicates
+            parliamentQueueCollection.deleteMany(
+                Filters.and(Filters.eq("type", "PROPOSAL_DISCUSSION"), Filters.eq("status", "pending"))
+            );
+
+            List<Document> activeProposals = proposalsCollection.find(
+                Filters.and(
+                    Filters.eq("votingEnded", false),
+                    Filters.eq("stupid", false) // Only add non-stupid, non-ended proposals
+                )
+            ).into(new ArrayList<>());
+
+            List<Document> queueEntries = new ArrayList<>();
+            for (Document proposal : activeProposals) {
+                int priorityValue; // Renamed for clarity
+                if (proposal.getBoolean("isConstitutional", false)) {
+                    priorityValue = 20; // Highest priority for active discussion items
+                } else if (proposal.getBoolean("isPriority", false)) {
+                    priorityValue = 25; // Next highest
+                } else {
+                    priorityValue = 30; // Standard proposals
+                }
+                
+                // Use current time for timestamp to ensure fresh items are ordered correctly if priorities are the same
+                // Or, if proposals have a 'lastActivityTimestamp' or 'submissionTimestamp', that could be used.
+                // For now, using new Date() for new queue entries.
+                Date itemTimestamp = new Date(); 
+
+                Document queueItem = new Document("type", "PROPOSAL_DISCUSSION")
+                    .append("proposalId", proposal.getObjectId("_id"))
+                    .append("proposalTitle", proposal.getString("title")) // XSS: Client responsible for escaping
+                    .append("proposalVisual", proposal.getString("proposalVisual")) // XSS: Client responsible for escaping
+                    .append("timestamp", itemTimestamp) 
+                    .append("priority", priorityValue)
+                    .append("status", "pending"); // All repopulated proposals start as pending in queue
+                queueEntries.add(queueItem);
+            }
+
+            if (!queueEntries.isEmpty()) {
+                parliamentQueueCollection.insertMany(queueEntries);
+            }
+            logger.info("Repopulated proposal discussion items in the queue with {} entries.", queueEntries.size());
+            broadcastQueueUpdate(); // Broadcast after repopulating
+        } catch (Exception e) {
+            logger.error("Error repopulating proposal queue: ", e);
+        }
+    }
+
+    private void handleRejectPendingProposal(HttpServletRequest request, HttpServletResponse response, String pendingProposalIdStr) throws IOException {
+        HttpSession session = request.getSession(false);
+        if (session == null || !"PRESIDENT".equals(session.getAttribute("role"))) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "Access denied. Only the President can reject proposals.");
+            logger.warn("Non-president user '{}' attempted to reject pending proposal ID '{}'.", session != null ? session.getAttribute("username") : "unauthenticated", pendingProposalIdStr);
+            return;
+        }
+        String presidentUsername = (String) session.getAttribute("username");
+
+        ObjectId pendingProposalObjectId;
+        try {
+            pendingProposalObjectId = new ObjectId(pendingProposalIdStr);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid pending proposal ID format '{}' in handleRejectPendingProposal by President '{}'.", pendingProposalIdStr, presidentUsername);
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid pending proposal ID format.");
+            return;
+        }
+
+        try {
+            Document pendingProposalDoc = pendingProposalsCollection.find(eq("_id", pendingProposalObjectId)).first();
+
+            if (pendingProposalDoc == null) {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Pending proposal not found.");
+                logger.warn("Pending proposal ID '{}' not found for rejection by President '{}'.", pendingProposalIdStr, presidentUsername);
+                return;
+            }
+
+            if (!"pending".equals(pendingProposalDoc.getString("status"))) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal is not pending and cannot be rejected. Current status: " + pendingProposalDoc.getString("status"));
+                logger.warn("President '{}' attempted to reject proposal ID '{}' which is not pending (status: {}).", presidentUsername, pendingProposalIdStr, pendingProposalDoc.getString("status"));
+                return;
+            }
+
+            // Update the pending proposal status to "rejected"
+            Document updatePending = new Document("$set", new Document("status", "rejected")
+                                                        .append("rejectedTimestamp", new Date()));
+            pendingProposalsCollection.updateOne(eq("_id", pendingProposalObjectId), updatePending);
+
+            response.setStatus(HttpServletResponse.SC_OK);
+            JSONObject resp = new JSONObject();
+            resp.put("message", "Pending proposal rejected successfully.");
+            resp.put("pendingProposalId", pendingProposalIdStr);
+            resp.put("status", "rejected");
+            response.setContentType("application/json");
+            response.getWriter().write(resp.toString());
+            logger.info("President '{}' rejected pending proposal ID '{}'.", presidentUsername, pendingProposalIdStr);
+            
+            // WebSocket Broadcast for the updated pending proposal status
+            JSONObject pendingStatusUpdateMsg = new JSONObject();
+            pendingStatusUpdateMsg.put("type", "pendingProposalStatusUpdate");
+            JSONObject pendingData = new JSONObject();
+            pendingData.put("id", pendingProposalIdStr);
+            pendingData.put("status", "rejected");
+            pendingStatusUpdateMsg.put("proposal", pendingData);
+            SeatWebSocket.broadcast(pendingStatusUpdateMsg);
+            logger.info("Broadcasted pending proposal status update for ID '{}' to 'rejected'.", pendingProposalIdStr);
+
+        } catch (Exception e) {
+            logger.error("Error during rejecting pending proposal ID '{}' by President '{}': ", pendingProposalIdStr, presidentUsername, e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while rejecting the proposal.");
+        }
+    }
+
+    private void handleGetParliamentQueue(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        HttpSession session = request.getSession(false);
+        // Allow all authenticated users to view the queue
+        if (session == null || session.getAttribute("userId") == null) {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
+            logger.warn("Unauthenticated attempt to view parliament queue.");
+            return;
+        }
+
+        try {
+            List<Document> queueItems = parliamentQueueCollection.find(
+                Filters.or(Filters.eq("status", "pending"), Filters.eq("status", "active"))
+            ).sort(Sorts.orderBy(Sorts.ascending("priority"), Sorts.ascending("timestamp"))).into(new ArrayList<>());
+
+            JSONArray queueJsonArray = new JSONArray();
+            for (Document item : queueItems) {
+                JSONObject queueItemJson = new JSONObject();
+                // Convert '_id' to 'id' and other fields from the document
+                queueItemJson.put("id", item.getObjectId("_id").toHexString());
+                queueItemJson.put("type", item.getString("type"));
+                queueItemJson.put("status", item.getString("status"));
+                queueItemJson.put("priority", item.getInteger("priority"));
+                
+                Date timestamp = item.getDate("timestamp");
+                if (timestamp != null) {
+                    queueItemJson.put("timestamp", timestamp.toInstant().toString());
+                } else {
+                    // Handle case where timestamp might be null, though it shouldn't be based on insertion logic
+                    queueItemJson.put("timestamp", ""); 
+                }
+
+
+                // Add type-specific fields, ensuring to check for nulls if fields are optional
+                if ("PROPOSAL_DISCUSSION".equals(item.getString("type"))) {
+                    if (item.getObjectId("proposalId") != null) {
+                        queueItemJson.put("proposalId", item.getObjectId("proposalId").toHexString());
+                    }
+                    queueItemJson.put("proposalTitle", item.getString("proposalTitle")); // XSS: Client responsible for escaping
+                    queueItemJson.put("proposalVisual", item.getString("proposalVisual")); // XSS: Client responsible for escaping
+                } else if ("SPEAKER_REQUEST".equals(item.getString("type"))) {
+                     if (item.getObjectId("userId") != null) {
+                        queueItemJson.put("userId", item.getObjectId("userId").toHexString());
+                    }
+                    queueItemJson.put("username", item.getString("username")); // XSS: Client responsible for escaping
+                    queueItemJson.put("requestType", item.getString("requestType"));
+                }
+                queueJsonArray.put(queueItemJson);
+            }
+
+            response.setContentType("application/json");
+            response.getWriter().write(queueJsonArray.toString());
+            logger.info("User '{}' fetched parliament queue with {} items.", session.getAttribute("username"), queueItems.size());
+
+        } catch (Exception e) {
+            logger.error("Error fetching parliament queue for user '{}': ", session.getAttribute("username"), e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while fetching the parliament queue.");
+        }
+    }
+
+    private void handleRequestSpeak(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        HttpSession session = request.getSession(false);
+        if (session == null || session.getAttribute("userId") == null) {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
+            logger.warn("Unauthenticated attempt to request to speak.");
+            return;
+        }
+
+        String sessionUserId = (String) session.getAttribute("userId");
+        String sessionUsername = (String) session.getAttribute("username");
+        ObjectId userObjectId;
+        try {
+            userObjectId = new ObjectId(sessionUserId);
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid sessionUserId '{}' for user '{}' during request to speak.", sessionUserId, sessionUsername, e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Invalid user session data.");
+            return;
+        }
+
+        try {
+            // Check if user already has an active ("pending") "SPEAKER_REQUEST" or "OBJECTION"
+            Document existingRequest = parliamentQueueCollection.find(
+                Filters.and(
+                    Filters.eq("userId", userObjectId),
+                    Filters.eq("status", "pending"),
+                    Filters.or(
+                        Filters.eq("type", "SPEAKER_REQUEST"),
+                        Filters.eq("type", "OBJECTION")
+                    )
+                )
+            ).first();
+
+            if (existingRequest != null) {
+                response.sendError(HttpServletResponse.SC_CONFLICT, "You are already in the queue or have an active objection.");
+                logger.warn("User '{}' (ID: {}) attempted to request to speak but is already in queue/objecting (Item ID: {}).", 
+                            sessionUsername, sessionUserId, existingRequest.getObjectId("_id").toHexString());
+                return;
+            }
+            
+            // Optional: Parse JSON request for proposalId
+            String proposalIdStr = null;
+            ObjectId proposalObjectId = null;
+            try {
+                StringBuilder sb = new StringBuilder();
+                String line;
+                // Check if request has a body. getReader() might throw if no body.
+                if (request.getContentLengthLong() > 0) { 
+                    while ((line = request.getReader().readLine()) != null) {
+                        sb.append(line);
+                    }
+                    if (sb.length() > 0) {
+                        JSONObject requestJson = new JSONObject(sb.toString());
+                        proposalIdStr = requestJson.optString("proposalId", null);
+                        if (proposalIdStr != null && !proposalIdStr.trim().isEmpty()) {
+                            proposalObjectId = new ObjectId(proposalIdStr.trim());
+                            // Optional: Validate if proposalId actually exists in proposalsCollection
+                        }
+                    }
+                }
+            } catch (IOException | org.json.JSONException e) {
+                logger.warn("Error parsing proposalId from request body for user '{}': {}", sessionUsername, e.getMessage());
+                // Not a fatal error, proceed without proposalId
+            } catch (IllegalArgumentException e) {
+                logger.warn("Invalid proposalId format '{}' provided by user '{}'.", proposalIdStr, sessionUsername);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID format.");
+                return;
+            }
+
+
+            Document queueItem = new Document("type", "SPEAKER_REQUEST")
+                .append("userId", userObjectId)
+                .append("username", sessionUsername) // XSS: Client responsible for escaping
+                .append("timestamp", new Date())
+                .append("priority", 10) // Standard priority for speaker requests
+                .append("status", "pending")
+                .append("requestType", "REQUESTING_TO_SPEAK"); // Default request type
+
+            if (proposalObjectId != null) {
+                queueItem.append("proposalId", proposalObjectId);
+            }
+
+            parliamentQueueCollection.insertOne(queueItem);
+            broadcastQueueUpdate();
+
+            response.setStatus(HttpServletResponse.SC_OK);
+            JSONObject respJson = new JSONObject();
+            respJson.put("message", "Request to speak added to queue.");
+            respJson.put("queueItemId", queueItem.getObjectId("_id").toHexString());
+            response.setContentType("application/json");
+            response.getWriter().write(respJson.toString());
+            logger.info("User '{}' (ID: {}) added to speaking queue. Item ID: {}.", sessionUsername, sessionUserId, queueItem.getObjectId("_id").toHexString());
+
+        } catch (Exception e) {
+            logger.error("Error during request to speak by user '{}': ", sessionUsername, e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while processing your request.");
+        }
+    }
+
+    private void handleQueueSetActive(HttpServletRequest request, HttpServletResponse response, String itemIdStr) throws IOException {
+        HttpSession session = request.getSession(false);
+        if (session == null || !"PRESIDENT".equals(session.getAttribute("role"))) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "Access denied. Only the President can set queue items active.");
+            logger.warn("Non-president user '{}' attempted to set queue item '{}' active.", session != null ? session.getAttribute("username") : "unauthenticated", itemIdStr);
+            return;
+        }
+        String presidentUsername = (String) session.getAttribute("username");
+
+        ObjectId itemObjectId;
+        try {
+            itemObjectId = new ObjectId(itemIdStr);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid item ID format '{}' in handleQueueSetActive by President '{}'.", itemIdStr, presidentUsername);
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid item ID format.");
+            return;
+        }
+
+        try {
+            // Atomically update: set current active to pending, then new one to active
+            // 1. Set all currently "active" items to "pending"
+            parliamentQueueCollection.updateMany(
+                Filters.eq("status", "active"),
+                Updates.set("status", "pending")
+            );
+
+            // 2. Set the specified item to "active"
+            Document updateQuery = new Document("_id", itemObjectId);
+            Document updateOperation = new Document("$set", new Document("status", "active"));
+            var updateResult = parliamentQueueCollection.updateOne(updateQuery, updateOperation);
+
+            if (updateResult.getModifiedCount() == 0) {
+                 // Check if the item actually exists, because updateOne won't fail if no doc matches _id
+                Document checkItemExists = parliamentQueueCollection.find(eq("_id", itemObjectId)).first();
+                if (checkItemExists == null) {
+                    response.sendError(HttpServletResponse.SC_NOT_FOUND, "Queue item not found.");
+                    logger.warn("President '{}' tried to set non-existent queue item ID '{}' active.", presidentUsername, itemIdStr);
+                    return;
+                }
+                // If item exists but wasn't modified, it might already be active or some other issue.
+                // For now, we assume if it exists, it should have been set active or was already active.
+                // If it was already active, the previous updateMany would make it pending, then this would make it active again.
+                logger.info("Queue item ID '{}' was targeted to be set active by President '{}'. Modified count was 0, but item exists. Status: {}", itemIdStr, presidentUsername, checkItemExists.getString("status"));
+
+            }
+            
+            Document activeItem = parliamentQueueCollection.find(eq("_id", itemObjectId)).first();
+            if (activeItem == null) {
+                 // Should not happen if updateResult.getModifiedCount() > 0 or if checkItemExists found it
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to retrieve active item after update.");
+                logger.error("CRITICAL: Failed to retrieve queue item ID '{}' after attempting to set active by President '{}'.", itemIdStr, presidentUsername);
+                return;
+            }
+
+
+            // If active item is a speaker request or objection, update user's seatStatus
+            String itemType = activeItem.getString("type");
+            if ("SPEAKER_REQUEST".equals(itemType) || "OBJECTION".equals(itemType)) {
+                ObjectId userIdToUpdate = activeItem.getObjectId("userId");
+                if (userIdToUpdate != null) {
+                    Document userUpdateQuery = new Document("_id", userIdToUpdate);
+                    Document userUpdateOperation = new Document("$set", new Document("seatStatus", "SPEAKING"));
+                    usersCollection.updateOne(userUpdateQuery, userUpdateOperation);
+
+                    // Broadcast individual user seat update
+                    Document updatedUserDoc = usersCollection.find(userUpdateQuery).first();
+                    if (updatedUserDoc != null) {
+                        JSONObject userJsonForBroadcast = new JSONObject();
+                        userJsonForBroadcast.put("id", updatedUserDoc.getObjectId("_id").toHexString());
+                        userJsonForBroadcast.put("username", updatedUserDoc.getString("username"));
+                        userJsonForBroadcast.put("role", updatedUserDoc.getString("role"));
+                        userJsonForBroadcast.put("partyAffiliation", updatedUserDoc.getString("partyAffiliation"));
+                        userJsonForBroadcast.put("present", updatedUserDoc.getBoolean("present", false));
+                        userJsonForBroadcast.put("seatStatus", updatedUserDoc.getString("seatStatus")); // Should be SPEAKING
+                        userJsonForBroadcast.put("fines", updatedUserDoc.getInteger("fines", 0));
+                        userJsonForBroadcast.put("electoralStrength", updatedUserDoc.getInteger("electoralStrength",1));
+                        
+                        JSONObject seatUpdateMsg = new JSONObject();
+                        seatUpdateMsg.put("type", "seatUpdate");
+                        seatUpdateMsg.put("user", userJsonForBroadcast);
+                        SeatWebSocket.broadcast(seatUpdateMsg);
+                        logger.info("Broadcasted seatUpdate for user '{}' (set to SPEAKING) due to queue item '{}' activation.", updatedUserDoc.getString("username"), itemIdStr);
+                    }
+                }
+            }
+
+            broadcastQueueUpdate();
+            response.setStatus(HttpServletResponse.SC_OK);
+            JSONObject respJson = new JSONObject();
+            respJson.put("message", "Queue item set to active.");
+            respJson.put("activeItemId", itemIdStr);
+            response.setContentType("application/json");
+            response.getWriter().write(respJson.toString());
+            logger.info("President '{}' set queue item ID '{}' to active.", presidentUsername, itemIdStr);
+
+        } catch (Exception e) {
+            logger.error("Error during setting queue item active (ID: '{}') by President '{}': ", itemIdStr, presidentUsername, e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while setting the queue item active.");
+        }
+    }
+
+    private void handleQueueCompleteActive(HttpServletRequest request, HttpServletResponse response, String itemIdStr) throws IOException {
+        HttpSession session = request.getSession(false);
+        if (session == null || !"PRESIDENT".equals(session.getAttribute("role"))) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "Access denied. Only the President can complete queue items.");
+            logger.warn("Non-president user '{}' attempted to complete queue item '{}'.", session != null ? session.getAttribute("username") : "unauthenticated", itemIdStr);
+            return;
+        }
+        String presidentUsername = (String) session.getAttribute("username");
+
+        ObjectId itemObjectId;
+        try {
+            itemObjectId = new ObjectId(itemIdStr);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid item ID format '{}' in handleQueueCompleteActive by President '{}'.", itemIdStr, presidentUsername);
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid item ID format.");
+            return;
+        }
+
+        try {
+            Document itemToComplete = parliamentQueueCollection.find(eq("_id", itemObjectId)).first();
+
+            if (itemToComplete == null) {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Queue item not found.");
+                logger.warn("President '{}' tried to complete non-existent queue item ID '{}'.", presidentUsername, itemIdStr);
+                return;
+            }
+
+            if (!"active".equals(itemToComplete.getString("status"))) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Queue item is not active and cannot be completed. Status: " + itemToComplete.getString("status"));
+                logger.warn("President '{}' tried to complete queue item ID '{}' which is not active (status: {}).", presidentUsername, itemIdStr, itemToComplete.getString("status"));
+                return;
+            }
+
+            // Update item status to "completed"
+            Document updateOperation = new Document("$set", new Document("status", "completed").append("completedTimestamp", new Date()));
+            parliamentQueueCollection.updateOne(eq("_id", itemObjectId), updateOperation);
+
+            // If item was speaker request or objection, update user's seatStatus to NEUTRAL
+            String itemType = itemToComplete.getString("type");
+            if ("SPEAKER_REQUEST".equals(itemType) || "OBJECTION".equals(itemType)) {
+                ObjectId userIdToUpdate = itemToComplete.getObjectId("userId");
+                if (userIdToUpdate != null) {
+                    Document userUpdateQuery = new Document("_id", userIdToUpdate);
+                    Document userUpdateOperation = new Document("$set", new Document("seatStatus", "NEUTRAL"));
+                    usersCollection.updateOne(userUpdateQuery, userUpdateOperation);
+                    
+                    // Broadcast individual user seat update
+                    Document updatedUserDoc = usersCollection.find(userUpdateQuery).first();
+                    if (updatedUserDoc != null) {
+                        JSONObject userJsonForBroadcast = new JSONObject();
+                        userJsonForBroadcast.put("id", updatedUserDoc.getObjectId("_id").toHexString());
+                        userJsonForBroadcast.put("username", updatedUserDoc.getString("username"));
+                        userJsonForBroadcast.put("role", updatedUserDoc.getString("role"));
+                        userJsonForBroadcast.put("partyAffiliation", updatedUserDoc.getString("partyAffiliation"));
+                        userJsonForBroadcast.put("present", updatedUserDoc.getBoolean("present", false));
+                        userJsonForBroadcast.put("seatStatus", updatedUserDoc.getString("seatStatus")); // Should be NEUTRAL
+                        userJsonForBroadcast.put("fines", updatedUserDoc.getInteger("fines", 0));
+                        userJsonForBroadcast.put("electoralStrength", updatedUserDoc.getInteger("electoralStrength",1));
+                        
+                        JSONObject seatUpdateMsg = new JSONObject();
+                        seatUpdateMsg.put("type", "seatUpdate");
+                        seatUpdateMsg.put("user", userJsonForBroadcast);
+                        SeatWebSocket.broadcast(seatUpdateMsg);
+                        logger.info("Broadcasted seatUpdate for user '{}' (set to NEUTRAL) due to queue item '{}' completion.", updatedUserDoc.getString("username"), itemIdStr);
+                    }
+                }
+            }
+
+            broadcastQueueUpdate();
+            response.setStatus(HttpServletResponse.SC_OK);
+            JSONObject respJson = new JSONObject();
+            respJson.put("message", "Queue item completed.");
+            respJson.put("completedItemId", itemIdStr);
+            response.setContentType("application/json");
+            response.getWriter().write(respJson.toString());
+            logger.info("President '{}' completed queue item ID '{}'.", presidentUsername, itemIdStr);
+
+        } catch (Exception e) {
+            logger.error("Error during completing queue item (ID: '{}') by President '{}': ", itemIdStr, presidentUsername, e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while completing the queue item.");
+        }
     }
 }
