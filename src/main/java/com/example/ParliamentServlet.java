@@ -351,8 +351,11 @@ public class ParliamentServlet extends HttpServlet {
             response.setContentType("application/json");
             response.getWriter().write(resp.toString());
 
+        } catch (org.json.JSONException je) {
+            logger.warn("Malformed JSON in request to {}: {}", request.getRequestURI(), je.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed JSON in request body.");
         } catch (Exception e) {
-            logger.error("Error during registration: ", e);
+            logger.error("Error during registration at {}: ", request.getRequestURI(), e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred during registration.");
         }
     }
@@ -511,8 +514,11 @@ public class ParliamentServlet extends HttpServlet {
             } catch (IllegalArgumentException e) {
                 logger.error("Invalid proposal ID format: {}", proposalIdString);
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID format.");
+            } catch (org.json.JSONException je) {
+                logger.warn("Malformed JSON in request to {}: {}", request.getRequestURI(), je.getMessage());
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed JSON in request body.");
             } catch (Exception e) {
-                logger.error("Error updating proposal: ", e);
+                logger.error("Error updating proposal at {}: ", request.getRequestURI(), e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while updating the proposal.");
             }
         } else {
@@ -568,8 +574,11 @@ public class ParliamentServlet extends HttpServlet {
 
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid username or password.");
             logger.warn("Failed login attempt for username '{}'.", username);
+        } catch (org.json.JSONException je) {
+            logger.warn("Malformed JSON in request to {}: {}", request.getRequestURI(), je.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed JSON in request body.");
         } catch (Exception e) {
-            logger.error("Error during login: ", e);
+            logger.error("Error during login at {}: ", request.getRequestURI(), e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred during login.");
         }
     }
@@ -696,6 +705,13 @@ public class ParliamentServlet extends HttpServlet {
                 String userIdStr = statusUpdateJson.getString("id");
                 String newStatus = statusUpdateJson.getString("seatStatus");
 
+                // Validate newStatus
+                if (!isValidSeatStatus(newStatus)) {
+                    logger.warn("Invalid seat status '{}' received for user ID '{}'.", newStatus, userIdStr);
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid seat status value provided: " + newStatus);
+                    return;
+                }
+
                 ObjectId userObjectId;
                 try {
                     userObjectId = new ObjectId(userIdStr);
@@ -800,8 +816,11 @@ public class ParliamentServlet extends HttpServlet {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
                 logger.warn("Unauthenticated attempt to update seat status.");
             }
+        } catch (org.json.JSONException je) {
+            logger.warn("Malformed JSON in request to {}: {}", request.getRequestURI(), je.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed JSON in request body.");
         } catch (Exception e) {
-            logger.error("Error during updating seat status: ", e);
+            logger.error("Error during updating seat status at {}: ", request.getRequestURI(), e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while updating seat status.");
         }
     }
@@ -903,8 +922,11 @@ public class ParliamentServlet extends HttpServlet {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can add proposals.");
                 logger.warn("Non-president attempted to add a new proposal.");
             }
+        } catch (org.json.JSONException je) {
+            logger.warn("Malformed JSON in request to {}: {}", request.getRequestURI(), je.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed JSON in request body.");
         } catch (Exception e) {
-            logger.error("Error during adding new proposal: ", e);
+            logger.error("Error during adding new proposal at {}: ", request.getRequestURI(), e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while adding the proposal.");
         }
     }
@@ -1009,8 +1031,11 @@ public class ParliamentServlet extends HttpServlet {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User not authenticated.");
                 logger.warn("Unauthenticated attempt to submit a vote.");
             }
+        } catch (org.json.JSONException je) {
+            logger.warn("Malformed JSON in request to {}: {}", request.getRequestURI(), je.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed JSON in request body.");
         } catch (Exception e) {
-            logger.error("Error during submitting vote: ", e);
+            logger.error("Error during submitting vote at {}: ", request.getRequestURI(), e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while submitting the vote.");
         }
     }
@@ -1614,8 +1639,11 @@ public class ParliamentServlet extends HttpServlet {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can submit election results.");
                 logger.warn("Unauthorized attempt to submit election results.");
             }
+        } catch (org.json.JSONException je) {
+            logger.warn("Malformed JSON in request to {}: {}", request.getRequestURI(), je.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed JSON in request body.");
         } catch (Exception e) {
-            logger.error("Error during processing election results: ", e);
+            logger.error("Error during processing election results at {}: ", request.getRequestURI(), e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while processing election results.");
         }
     }
@@ -1673,8 +1701,11 @@ public class ParliamentServlet extends HttpServlet {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can update user information.");
                 logger.warn("Unauthorized attempt to update user information.");
             }
+        } catch (org.json.JSONException je) {
+            logger.warn("Malformed JSON in request to {}: {}", request.getRequestURI(), je.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed JSON in request body.");
         } catch (Exception e) {
-            logger.error("Error during updating user information: ", e);
+            logger.error("Error during updating user information at {}: ", request.getRequestURI(), e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while updating user information.");
         }
     }
@@ -1746,8 +1777,11 @@ public class ParliamentServlet extends HttpServlet {
                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Only the president can impose fines.");
                 logger.warn("Unauthorized attempt to impose a fine.");
             }
+        } catch (org.json.JSONException je) {
+            logger.warn("Malformed JSON in request to {}: {}", request.getRequestURI(), je.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed JSON in request body.");
         } catch (Exception e) {
-            logger.error("Error during imposing fine: ", e);
+            logger.error("Error during imposing fine at {}: ", request.getRequestURI(), e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while imposing the fine.");
         }
     }
@@ -2068,11 +2102,24 @@ public class ParliamentServlet extends HttpServlet {
             JSONObject proposalJson = new JSONObject(sb.toString());
 
             String title = proposalJson.optString("title", "").trim();
-            String description = proposalJson.optString("description", "").trim();
+            String description = proposalJson.optString("description", "").trim(); // Already optional
+
+            final int MAX_TITLE_LENGTH = 200;
+            final int MAX_DESC_LENGTH = 2000;
 
             if (title.isEmpty()) {
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal title cannot be empty.");
                 logger.warn("User '{}' attempted to submit a proposal with an empty title.", sessionUsername);
+                return;
+            }
+            if (title.length() > MAX_TITLE_LENGTH) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Title exceeds maximum length of " + MAX_TITLE_LENGTH + " characters.");
+                logger.warn("User '{}' submitted proposal with title exceeding max length. Title length: {}", sessionUsername, title.length());
+                return;
+            }
+            if (description.length() > MAX_DESC_LENGTH) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Description exceeds maximum length of " + MAX_DESC_LENGTH + " characters.");
+                logger.warn("User '{}' submitted proposal with description exceeding max length. Description length: {}", sessionUsername, description.length());
                 return;
             }
             
@@ -2083,6 +2130,20 @@ public class ParliamentServlet extends HttpServlet {
             } catch (IllegalArgumentException e) {
                 logger.error("Invalid sessionUserId '{}' for user '{}'.", sessionUserId, sessionUsername, e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Invalid user session data.");
+                return;
+            }
+
+            // Check for recent duplicates
+            long thirtySecondsAgo = System.currentTimeMillis() - 30000;
+            Document recentDuplicateQuery = new Document("submittedByUserId", userObjectId)
+                .append("title", title)
+                // Not checking description for stricter match, title and user within timeframe is enough
+                .append("status", "pending")
+                .append("submissionTimestamp", new Document("$gte", new Date(thirtySecondsAgo)));
+            
+            if (pendingProposalsCollection.find(recentDuplicateQuery).first() != null) {
+                response.sendError(HttpServletResponse.SC_CONFLICT, "Duplicate submission detected. Please wait a moment before resubmitting.");
+                logger.warn("User '{}' attempted to submit a duplicate proposal for title '{}' within 30 seconds.", sessionUsername, title);
                 return;
             }
 
@@ -2123,8 +2184,11 @@ public class ParliamentServlet extends HttpServlet {
             SeatWebSocket.broadcast(wsMessage); 
             logger.info("Broadcasted new pending proposal notification for ID '{}'.", insertedId.toHexString());
 
+        } catch (org.json.JSONException je) {
+            logger.warn("Malformed JSON in request to {}: {}", request.getRequestURI(), je.getMessage());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed JSON in request body.");
         } catch (Exception e) {
-            logger.error("Error during player proposal submission by user '{}': ", sessionUsername, e);
+            logger.error("Error during player proposal submission by user '{}' at {}: ", sessionUsername, request.getRequestURI(), e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while submitting the proposal.");
         }
     }
@@ -2171,17 +2235,25 @@ public class ParliamentServlet extends HttpServlet {
         }
 
         try {
-            Document pendingProposalDoc = pendingProposalsCollection.find(eq("_id", pendingProposalObjectId)).first();
+            // Atomically check status and retrieve
+            Document pendingProposalDoc = pendingProposalsCollection.find(
+                Filters.and(
+                    Filters.eq("_id", pendingProposalObjectId),
+                    Filters.eq("status", "pending")
+                )
+            ).first();
 
             if (pendingProposalDoc == null) {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Pending proposal not found.");
-                logger.warn("Pending proposal ID '{}' not found for approval by President '{}'.", pendingProposalIdStr, presidentUsername);
-                return;
-            }
-
-            if (!"pending".equals(pendingProposalDoc.getString("status"))) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal is not pending and cannot be approved. Current status: " + pendingProposalDoc.getString("status"));
-                logger.warn("President '{}' attempted to approve proposal ID '{}' which is not pending (status: {}).", presidentUsername, pendingProposalIdStr, pendingProposalDoc.getString("status"));
+                // This means either not found OR status was not "pending"
+                // Check if it exists at all to give a more specific error
+                Document checkExists = pendingProposalsCollection.find(eq("_id", pendingProposalObjectId)).first();
+                if (checkExists == null) {
+                    response.sendError(HttpServletResponse.SC_NOT_FOUND, "Pending proposal not found.");
+                    logger.warn("Pending proposal ID '{}' not found for approval by President '{}'.", pendingProposalIdStr, presidentUsername);
+                } else {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal is not pending and cannot be approved. Current status: " + checkExists.getString("status"));
+                    logger.warn("President '{}' attempted to approve proposal ID '{}' which is not pending (status: {}).", presidentUsername, pendingProposalIdStr, checkExists.getString("status"));
+                }
                 return;
             }
 
@@ -2229,12 +2301,18 @@ public class ParliamentServlet extends HttpServlet {
             proposalsCollection.insertOne(mainProposalDoc);
             ObjectId mainProposalId = mainProposalDoc.getObjectId("_id");
 
-            // Update the original pending proposal
+            // Update the original pending proposal IF main proposal insertion was successful
+            // If this update fails, we log it, but the main proposal is already in.
             Document updatePending = new Document("$set", new Document("status", "approved")
                                                         .append("approvedTimestamp", new Date())
                                                         .append("mainProposalId", mainProposalId));
-            pendingProposalsCollection.updateOne(eq("_id", pendingProposalObjectId), updatePending);
-
+            try {
+                pendingProposalsCollection.updateOne(eq("_id", pendingProposalObjectId), updatePending);
+            } catch (Exception e_update) {
+                logger.error("CRITICAL: Failed to update status of pending proposal ID '{}' to 'approved' after creating main proposal ID '{}'. Manual cleanup might be needed. Error: {}", pendingProposalIdStr, mainProposalId.toHexString(), e_update.getMessage());
+                // Continue with the response as the main proposal was created.
+            }
+            
             // Prepare response with main proposal details
             Document insertedProposal = proposalsCollection.find(Filters.eq("_id", mainProposalId)).first();
             JSONObject responseJson = new JSONObject();
@@ -2449,17 +2527,24 @@ public class ParliamentServlet extends HttpServlet {
         }
 
         try {
-            Document pendingProposalDoc = pendingProposalsCollection.find(eq("_id", pendingProposalObjectId)).first();
+            // Atomically check status and retrieve
+            Document pendingProposalDoc = pendingProposalsCollection.find(
+                Filters.and(
+                    Filters.eq("_id", pendingProposalObjectId),
+                    Filters.eq("status", "pending")
+                )
+            ).first();
 
             if (pendingProposalDoc == null) {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Pending proposal not found.");
-                logger.warn("Pending proposal ID '{}' not found for rejection by President '{}'.", pendingProposalIdStr, presidentUsername);
-                return;
-            }
-
-            if (!"pending".equals(pendingProposalDoc.getString("status"))) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal is not pending and cannot be rejected. Current status: " + pendingProposalDoc.getString("status"));
-                logger.warn("President '{}' attempted to reject proposal ID '{}' which is not pending (status: {}).", presidentUsername, pendingProposalIdStr, pendingProposalDoc.getString("status"));
+                // This means either not found OR status was not "pending"
+                Document checkExists = pendingProposalsCollection.find(eq("_id", pendingProposalObjectId)).first();
+                if (checkExists == null) {
+                    response.sendError(HttpServletResponse.SC_NOT_FOUND, "Pending proposal not found.");
+                    logger.warn("Pending proposal ID '{}' not found for rejection by President '{}'.", pendingProposalIdStr, presidentUsername);
+                } else {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Proposal is not pending and cannot be rejected. Current status: " + checkExists.getString("status"));
+                    logger.warn("President '{}' attempted to reject proposal ID '{}' which is not pending (status: {}).", presidentUsername, pendingProposalIdStr, checkExists.getString("status"));
+                }
                 return;
             }
 
@@ -2770,17 +2855,20 @@ public class ParliamentServlet extends HttpServlet {
         }
 
         try {
-            Document itemToComplete = parliamentQueueCollection.find(eq("_id", itemObjectId)).first();
+            Document itemToComplete = parliamentQueueCollection.find(
+                Filters.and(Filters.eq("_id", itemObjectId), Filters.eq("status", "active"))
+            ).first();
 
             if (itemToComplete == null) {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Queue item not found.");
-                logger.warn("President '{}' tried to complete non-existent queue item ID '{}'.", presidentUsername, itemIdStr);
-                return;
-            }
-
-            if (!"active".equals(itemToComplete.getString("status"))) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Queue item is not active and cannot be completed. Status: " + itemToComplete.getString("status"));
-                logger.warn("President '{}' tried to complete queue item ID '{}' which is not active (status: {}).", presidentUsername, itemIdStr, itemToComplete.getString("status"));
+                // Check if the item exists at all to provide a more specific error if it's not found vs. not active
+                Document checkExists = parliamentQueueCollection.find(eq("_id", itemObjectId)).first();
+                if (checkExists == null) {
+                    logger.warn("President {} attempted to complete item ID '{}', but it was not found.", presidentUsername, itemIdStr);
+                    response.sendError(HttpServletResponse.SC_NOT_FOUND, "Queue item not found.");
+                } else {
+                    logger.warn("President {} attempted to complete item ID '{}', but it was not active. Current status: {}", presidentUsername, itemIdStr, checkExists.getString("status"));
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Queue item is not currently active.");
+                }
                 return;
             }
 
