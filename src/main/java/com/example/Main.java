@@ -36,13 +36,21 @@ public class Main {
                 httpResponse.setHeader("X-Content-Type-Options", "nosniff");
                 httpResponse.setHeader("X-Frame-Options", "SAMEORIGIN"); // Or DENY if you don't embed elsewhere
 
+                // Determine WebSocket scheme
+                String wsScheme = "ws://";
+                if (request.isSecure() || "https".equalsIgnoreCase(request.getScheme())) {
+                    wsScheme = "wss://";
+                }
+                String wsConnectSrc = wsScheme + request.getServerName() + ":" + request.getServerPort();
+
                 // Define CSP directives
                 // Start with a reasonably strict policy. Adjust if necessary.
                 String cspDirectives = "default-src 'self'; " +
                                      "script-src 'self' https://cdn.tailwindcss.com 'sha256-osMYrv5MtkdHa0ijz1PNNThFOAQEpqOTVcRIWv0aaRA='; " +
-                                     "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; " + // 'unsafe-inline' might be needed for Tailwind/inline styles
+                                     // TODO: 'unsafe-inline' for style-src is generally discouraged. Review if it can be removed or replaced with hashes/nonces for better security.
+                                     "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; " + 
                                      "font-src 'self' https://fonts.gstatic.com; " +
-                                     "connect-src 'self' ws://" + request.getServerName() + ":" + request.getServerPort() + "; " + // For WebSocket
+                                     "connect-src 'self' " + wsConnectSrc + "; " + // For WebSocket
                                      "img-src 'self' data:; " + // Allow self and data: URLs for images (if any)
                                      "object-src 'none'; " +
                                      "frame-ancestors 'self';"; // Similar to X-Frame-Options
@@ -73,6 +81,24 @@ public class Main {
         // Create a ServletContextHandler with sessions enabled
         ServletContextHandler context = new ServletContextHandler(ServletContextHandler.SESSIONS);
         context.setContextPath("/"); // Set root context
+
+        // Configure session cookie security
+        if (context.getSessionHandler() != null && context.getSessionHandler().getSessionCookieConfig() != null) {
+            context.getSessionHandler().getSessionCookieConfig().setHttpOnly(true);
+            // Set Secure flag for session cookies.
+            // IMPORTANT: This should only be enabled if the application is exclusively served over HTTPS.
+            // For local HTTP development, setting this to true will prevent cookies from being sent.
+            // Consider making this configurable via an environment variable for production deployments.
+            boolean forceSecureCookies = Boolean.parseBoolean(System.getenv("FORCE_SECURE_COOKIES")); // Example: use env var
+            if (forceSecureCookies) {
+                 context.getSessionHandler().getSessionCookieConfig().setSecure(true);
+                 logger.info("Session cookies will be marked as Secure.");
+            } else {
+                 logger.warn("Session cookies will NOT be marked as Secure. Ensure FORCE_SECURE_COOKIES is true in HTTPS environments.");
+            }
+        } else {
+            logger.warn("SessionHandler or SessionCookieConfig is null, could not configure HttpOnly/Secure flags for session cookies.");
+        }
 
         server.setHandler(context); // Assign the handler to the server
 

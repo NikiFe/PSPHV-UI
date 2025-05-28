@@ -57,11 +57,11 @@
             <version>20231013</version>
         </dependency>
 
-        <!-- BCrypt for Password Hashing -->
+        <!-- Spring Security Crypto for Password Hashing -->
         <dependency>
-            <groupId>org.mindrot</groupId>
-            <artifactId>jbcrypt</artifactId>
-            <version>0.4</version>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+            <version>5.7.10</version>
         </dependency>
 
         <!-- SLF4J API for Logging -->
@@ -84,6 +84,32 @@
             <artifactId>javax.servlet-api</artifactId>
             <version>3.1.0</version>
             <!-- <scope>provided</scope> --> <!-- Removed -->
+        </dependency>
+
+        <!-- Testing Dependencies -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>5.9.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>5.9.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>4.11.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <version>4.11.0</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
