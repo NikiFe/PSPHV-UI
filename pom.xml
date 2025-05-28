@@ -21,6 +21,12 @@
             <artifactId>jetty-server</artifactId>
             <version>${jetty.version}</version>
         </dependency>
+        <!-- Apache Commons Logging - Required by Spring Security -->
+        <dependency>
+            <groupId>commons-logging</groupId>
+            <artifactId>commons-logging</artifactId>
+            <version>1.2</version>
+        </dependency>
 
         <!-- Jetty Servlet -->
         <dependency>

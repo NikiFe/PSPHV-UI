@@ -55,6 +55,15 @@ const alertMessage = document.getElementById('alert-message');
 const breakOverlay = document.getElementById('break-overlay');
 const endBreakButton = document.getElementById('end-break');
 
+// NEW: Queue Elements
+const parliamentaryQueueTableBody = document.getElementById('parliamentary-queue-table-body');
+const requestSpeakButton          = document.getElementById('request-speak-button');
+const queueActionsHeader          = document.getElementById('queue-actions-header');
+const queueWindow                 = document.getElementById('parliamentary-queue-section');
+const queueWindowHandle           = document.getElementById('queue-drag-handle');
+const queueCollapseButton         = document.getElementById('queue-collapse');
+
+
 // ======================
 // State Variables
 // ======================
@@ -65,6 +74,43 @@ let csrfToken = null; // Variable to store the CSRF token
 // ======================
 // Utility Functions
 // ======================
+
+
+function makeDraggable(handle, element) {
+    let startX = 0, startY = 0, origX = 0, origY = 0, dragging = false;
+
+    handle.addEventListener('mousedown', startDrag);
+    handle.addEventListener('touchstart', startDrag, { passive: false });
+
+    function startDrag(e) {
+        e.preventDefault();
+        dragging = true;
+        startX = (e.touches ? e.touches[0].clientX : e.clientX);
+        startY = (e.touches ? e.touches[0].clientY : e.clientY);
+        const rect = element.getBoundingClientRect();
+        origX = rect.left;
+        origY = rect.top;
+        document.addEventListener('mousemove', onDrag);
+        document.addEventListener('touchmove', onDrag, { passive: false });
+        document.addEventListener('mouseup', endDrag);
+        document.addEventListener('touchend', endDrag);
+    }
+    function onDrag(e) {
+        if (!dragging) return;
+        e.preventDefault();
+        const x = (e.touches ? e.touches[0].clientX : e.clientX);
+        const y = (e.touches ? e.touches[0].clientY : e.clientY);
+        element.style.left = `${origX + (x - startX)}px`;
+        element.style.top  = `${origY + (y - startY)}px`;
+    }
+    function endDrag() {
+        dragging = false;
+        document.removeEventListener('mousemove', onDrag);
+        document.removeEventListener('touchmove', onDrag);
+        document.removeEventListener('mouseup', endDrag);
+        document.removeEventListener('touchend', endDrag);
+    }
+}
 
 function getHeadersWithCsrf(additionalHeaders = {}) {
     const headers = {
@@ -190,6 +236,192 @@ async function fetchUserInfo() {
         currentUser = null; // Ensure currentUser is null on error
         csrfToken = null;  // Clear CSRF token on error
         return null;
+    }
+}
+
+/**
+ * Renders the parliamentary queue in the UI.
+ */
+function renderQueue(queueItems = []) {
+    /* safety checks ------------------------------------------------------- */
+    if (!parliamentaryQueueTableBody) {
+        console.error('Parliamentary queue table body not found!');
+        return;
+    }
+
+    /* clear previous rows ------------------------------------------------- */
+    parliamentaryQueueTableBody.replaceChildren();
+
+    /* show placeholder when empty ---------------------------------------- */
+    if (queueItems.length === 0) {
+        const emptyRow = parliamentaryQueueTableBody.insertRow();
+        emptyRow.classList.add('text-gray-400');
+        const td = emptyRow.insertCell(0);
+        td.colSpan = currentUser && currentUser.role === 'PRESIDENT' ? 6 : 5;
+        td.classList.add('py-3', 'text-center');
+        td.textContent = 'Queue is empty';
+        return;
+    }
+
+    /* build rows ---------------------------------------------------------- */
+    queueItems.forEach((item, index) => {
+        const row = parliamentaryQueueTableBody.insertRow();
+        row.dataset.queueItemId = item.id;
+
+        const cellBase   = ['py-2', 'px-4', 'border-b', 'border-gray-600', 'text-center'];
+        const wrapCells  = [...cellBase, 'break-words', 'whitespace-pre-wrap'];
+
+        const [num, type, who, prio, stat, act] =
+              Array.from({ length: 6 }, () => row.insertCell(-1));
+
+        num .classList.add(...cellBase);
+        type.classList.add(...cellBase);
+        who .classList.add(...wrapCells);
+        prio.classList.add(...cellBase);
+        stat.classList.add(...cellBase);
+        act .classList.add(...cellBase);
+
+        num .textContent = index + 1;
+        type.textContent = item.type.replace(/_/g, ' ');
+        //  10‥20  → High   (speaker requests, constitutional)
+        //  21‥25  → High   (priority proposals)
+        //  26+    → Normal (normal proposals, or anything lower-priority)
+        if (item.priority <= 7) {
+            prio.textContent = 'Critical';
+            prio.classList.add('text-red-400', 'font-bold');        // 🔴 optional styling
+        } else if (item.priority <= 25) {
+            prio.textContent = 'High';
+        } else {
+            prio.textContent = 'Normal';
+        }
+
+        stat.textContent = item.status;
+
+        if (item.status === 'active')  row.classList.add('bg-green-800/40');
+        if (item.status === 'pending') row.classList.add('bg-yellow-800/20');
+
+        /* user / proposal column ----------------------------------------- */
+        if (item.type === 'SPEAKER_REQUEST' || item.type === 'OBJECTION') {
+            who.textContent = item.username || 'N/A';
+        } else if (item.type === 'PROPOSAL_DISCUSSION') {
+            who.textContent = item.proposalTitle || item.proposalVisual || 'N/A';
+        } else {
+            who.textContent = 'N/A';
+        }
+
+        /* president-only action buttons ---------------------------------- */
+        act.replaceChildren();
+        if (currentUser?.role === 'PRESIDENT') {
+            queueActionsHeader.classList.remove('hidden');
+
+            if (item.status === 'pending') {
+                const btn = document.createElement('button');
+                btn.textContent = 'Set Active';
+                btn.classList.add('bg-green-500', 'hover:bg-green-600',
+                                  'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+                btn.onclick = () => setQueueItemActive(item.id);
+                act.appendChild(btn);
+            } else if (item.status === 'active') {
+                const btn = document.createElement('button');
+                btn.textContent = 'Complete';
+                btn.classList.add('bg-red-500', 'hover:bg-red-600',
+                                  'text-white', 'py-1', 'px-2', 'rounded', 'text-xs');
+                btn.onclick = () => completeActiveQueueItem(item.id);
+                act.appendChild(btn);
+            }
+        } else {
+            queueActionsHeader.classList.add('hidden');
+            act.textContent = '—';
+        }
+    });
+}
+
+/**
+ * Handles requesting to speak.
+ */
+async function requestToSpeak() {
+    try {
+        const response = await fetch('/api/queue/request-speak', {
+            method: 'POST',
+            headers: getHeadersWithCsrf(),
+            body: JSON.stringify({})
+        });
+
+
+        if (response.ok) {
+            showAlert('Request to speak added to queue.', 'success');
+            await fetchQueue(); // Refresh queue
+        } else {
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error requesting to speak:', error);
+        showAlert('An error occurred while requesting to speak.', 'error');
+    }
+}
+
+async function fetchQueue(retry = false) {
+    try {
+        const res = await fetch('/api/parliament-queue/view', {
+            method: 'GET',
+            headers: getHeadersWithCsrf(),   // adds X-CSRF-TOKEN when we have one
+            credentials: 'include'           // sends the session cookie
+        });
+
+        if (!res.ok) throw new Error(res.statusText);
+        const q = await res.json();
+        renderQueue(q);
+    } catch (err) {
+        console.error('Queue fetch failed:', err);
+        if (!retry) setTimeout(() => fetchQueue(true), 1000);
+    }
+}
+
+
+/**
+ * President sets a queue item as active.
+ */
+async function setQueueItemActive(itemId) {
+    try {
+        const response = await fetch(`/api/queue/set-active/${itemId}`, {
+            method: 'POST',
+            headers: getHeadersWithCsrf()
+        });
+
+        if (response.ok) {
+            showAlert('Queue item set to active.', 'success');
+            await fetchQueue(); // Refresh queue
+        } else {
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error setting queue item active:', error);
+        showAlert('An error occurred while setting the queue item active.', 'error');
+    }
+}
+
+/**
+ * President completes the active queue item.
+ */
+async function completeActiveQueueItem(itemId) {
+    try {
+        const response = await fetch(`/api/queue/complete-active/${itemId}`, {
+            method: 'POST',
+            headers: getHeadersWithCsrf()
+        });
+
+        if (response.ok) {
+            showAlert('Active queue item completed.', 'success');
+            await fetchQueue(); // Refresh queue
+        } else {
+            const errorText = await response.text();
+            showAlert(`Error: ${errorText}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error completing active queue item:', error);
+        showAlert('An error occurred while completing the active queue item.', 'error');
     }
 }
 
@@ -1262,6 +1494,11 @@ function handleSeatUpdate(user) {
     }
 }
 
+function handleQueueUpdate(queue) {
+    console.log('Queue update received, rendering queue.');
+    renderQueue(queue);
+}
+
 function handleFineImposed(username, amount) {
     showAlert(`User ${username} has been fined ${amount} units.`, 'warning');
 }
@@ -1334,6 +1571,9 @@ function initializeWebSocket() {
                 case 'endSession':
                     handleEndSession();
                     break;
+                case 'queueUpdate':
+                    handleQueueUpdate(message.queue);
+                    break;
                 default:
                     console.warn('Unknown WebSocket message type:', message.type);
             }
@@ -1378,22 +1618,25 @@ async function setupAuthenticatedSession(isInitialLoad = false) {
             if (normalStupidHeader) normalStupidHeader.classList.remove('hidden');
             if (priorityStupidHeader) priorityStupidHeader.classList.remove('hidden');
             if (constitutionalStupidHeader) constitutionalStupidHeader.classList.remove('hidden'); // Show if president
+            if (queueActionsHeader) queueActionsHeader.classList.remove('hidden'); // Show queue actions header for president
         } else {
             if (normalStupidHeader) normalStupidHeader.classList.add('hidden');
             if (priorityStupidHeader) priorityStupidHeader.classList.add('hidden');
-            if (constitutionalStupidHeader) constitutionalStupidHeader.classList.add('hidden'); // Hide if not president
+            if (constitutionalStupidHeader) constitutionalProposalsTable.classList.add('hidden'); // Hide if not president
+            if (queueActionsHeader) queueActionsHeader.classList.add('hidden'); // Hide queue actions header for non-president
         }
 
-        await checkBreakStatus(); 
+        await checkBreakStatus();
         await fetchProposals();
         await fetchUsers();
-        
+        await fetchQueue(); // Fetch queue on session setup
+
         if (ws === null || ws.readyState === WebSocket.CLOSED) {
              initializeWebSocket();
         }
-       
+
         // Polling is removed - rely on initial fetch and WebSockets
-        // if (isInitialLoad) { 
+        // if (isInitialLoad) {
         //     startPolling();
         // }
     } else {
@@ -1418,10 +1661,14 @@ function resetApp() {
 
     const constitutionalProposalsTableBody = document.getElementById('constitutional-proposals-table-body');
     if (constitutionalProposalsTableBody) constitutionalProposalsTableBody.replaceChildren();
-    
+
     const seatLayout = document.getElementById('seat-layout');
     if (seatLayout) seatLayout.replaceChildren();
-    
+
+    // NEW: Clear queue table on reset and hide section
+    if (parliamentaryQueueTableBody) parliamentaryQueueTableBody.replaceChildren();
+
+
     if (presidentActions) presidentActions.classList.add('hidden');
 
     if (ws) {
@@ -1444,16 +1691,44 @@ async function checkAuthentication() {
     }
 }
 
+/* ----------  draggable queue window  ---------- */
+(function makeQueueWindowDraggable () {
+    /* drag-enable ---------------------------------- */
+    if (queueWindow && queueWindowHandle) {
+        makeDraggable(queueWindowHandle, queueWindow);
+    }
+
+    /* collapse / expand ---------------------------- */
+    if (queueCollapseButton && queueWindow) {
+        let collapsed = false;
+        queueCollapseButton.addEventListener('click', () => {
+            collapsed = !collapsed;
+            queueWindow
+                .querySelector('.overflow-x-auto')
+                .classList.toggle('hidden', collapsed);
+
+            queueCollapseButton.textContent = collapsed ? '+' : '−';
+        });
+    }
+})();   //  ←—--- add this: closes the brace AND immediately invokes the function
+
+
+
 window.addEventListener('DOMContentLoaded', () => {
     if (loginTab && registerTab) {
         loginTab.addEventListener('click', () => switchTab('login'));
         registerTab.addEventListener('click', () => switchTab('register'));
     }
     // Add event listener for the proposal association type dropdown
-    if (newProposalAssociationType) { 
+    if (newProposalAssociationType) {
         newProposalAssociationType.addEventListener('change', controlAssProposal);
     }
-    
+
+    // NEW: Add event listener for Request to Speak button
+    if (requestSpeakButton) {
+        requestSpeakButton.addEventListener('click', requestToSpeak);
+    }
+
     checkAuthentication(); // Check auth on load
 });
 

@@ -64,6 +64,9 @@ public class ParliamentServlet extends HttpServlet {
 
         // Initialize Discord webhook URL
         initializeDiscordWebhookUrl();
+
+        // pull in every still-open proposal right after we start
+        repopulateProposalQueue();
     }
 
     private void initializeDiscordWebhookUrl() {
@@ -265,9 +268,9 @@ public class ParliamentServlet extends HttpServlet {
                 // Convert '_id' to 'id'
                 proposalJson.put("id", proposal.getObjectId("_id").toHexString());
                 // Client-side code is responsible for HTML escaping this value if rendered in HTML to prevent XSS.
-                proposalJson.put("title", proposal.getString("title")); 
+                proposalJson.put("title", proposal.getString("title"));
                 // Client-side code is responsible for HTML escaping this value if rendered in HTML to prevent XSS.
-                proposalJson.put("party", proposal.getString("party")); 
+                proposalJson.put("party", proposal.getString("party"));
                 // Add other fields from 'proposal' document as needed, ensuring to respect original structure
                 // For example, if proposal.toJson() included other fields, add them explicitly too.
                 // This example assumes only id, title, and party were directly relevant for this specific transformation.
@@ -554,7 +557,7 @@ public class ParliamentServlet extends HttpServlet {
                     session.setAttribute("username", username);
                     session.setAttribute("role", userDoc.getString("role"));
                     session.setAttribute("userId", userDoc.getObjectId("_id").toHexString());
-                    session.setAttribute("electoralStrength", userDoc.getInteger("electoralStrength", 1));
+                    session.setAttribute("electoralStrength", safeInt(userDoc,"electoralStrength", 1));
 
                     // Generate and store CSRF token
                     String csrfToken = UUID.randomUUID().toString();
@@ -595,12 +598,12 @@ public class ParliamentServlet extends HttpServlet {
                 userJson.put("username", userDoc.getString("username"));
                 userJson.put("role", userDoc.getString("role"));
                 userJson.put("partyAffiliation", userDoc.getString("partyAffiliation"));
-                
+
                 // Add other non-sensitive fields as needed
                 userJson.put("present", userDoc.getBoolean("present", false));
                 userJson.put("seatStatus", userDoc.getString("seatStatus"));
-                userJson.put("fines", userDoc.getInteger("fines", 0));
-                userJson.put("electoralStrength", userDoc.getInteger("electoralStrength",1));
+                userJson.put("fines", safeInt(userDoc,"fines", 0));
+                userJson.put("electoralStrength", userDoc.get("electoralStrength", Number.class).intValue());
                 // userJson.remove("password"); // Not needed as we are selectively adding
 
                 // Retrieve CSRF token from session and add to response
@@ -756,9 +759,9 @@ public class ParliamentServlet extends HttpServlet {
                         logger.info("Removed pending SPEAKER_REQUEST for user '{}' due to new OBJECTION.", targetUsername);
 
                         // Upsert an objection item
-                        Document objectionQuery = Filters.and(
+                        Bson objectionQuery = Filters.and(
                             Filters.eq("userId", userObjectId),
-                            Filters.eq("type", "OBJECTION") 
+                            Filters.eq("type", "OBJECTION")
                         );
                         Document objectionUpdate = new Document("$set", new Document("username", targetUsername) // XSS: Client responsible for escaping
                                                                     .append("timestamp", new Date())
@@ -773,7 +776,7 @@ public class ParliamentServlet extends HttpServlet {
                         // President changed status from OBJECTING to something else (e.g., NEUTRAL, SPEAKING)
                         // Note: If changing to SPEAKING because they were selected from queue, handleQueueSetActive will manage it.
                         // This handles direct cancellation by President.
-                        Document objectionQuery = Filters.and(
+                        Bson objectionQuery = Filters.and(
                             Filters.eq("userId", userObjectId),
                             Filters.eq("type", "OBJECTION"),
                             Filters.eq("status", "pending") // Only affect pending objections
@@ -786,6 +789,47 @@ public class ParliamentServlet extends HttpServlet {
                            broadcastQueueUpdate();
                         }
                     }
+                    if ("REQUESTING_TO_SPEAK".equals(newStatus)) {
+                        // remove any stale requests this user still has
+                        parliamentQueueCollection.deleteMany(Filters.and(
+                                Filters.eq("userId", userObjectId),
+                                Filters.eq("type", "SPEAKER_REQUEST"),
+                                Filters.eq("status", "pending")
+                        ));
+
+                        Document speakReq = new Document("$set",
+                                new Document("username", targetUsername)
+                                        .append("timestamp", new Date())
+                                        .append("priority", 10)          // lower than objection
+                                        .append("status",   "pending"))
+                                .append("$setOnInsert",
+                                        new Document("userId", userObjectId)
+                                                .append("type", "SPEAKER_REQUEST"));
+
+                        parliamentQueueCollection.updateOne(
+                                Filters.and(
+                                        Filters.eq("userId", userObjectId),
+                                        Filters.eq("type",   "SPEAKER_REQUEST")
+                                ),
+                                speakReq,
+                                new UpdateOptions().upsert(true)
+                        );
+                        broadcastQueueUpdate();
+                    } else if ("REQUESTING_TO_SPEAK".equals(currentSeatStatus)
+                            && !"REQUESTING_TO_SPEAK".equals(newStatus)) {
+                        parliamentQueueCollection.updateOne(
+                                Filters.and(
+                                        Filters.eq("userId", userObjectId),
+                                        Filters.eq("type",   "SPEAKER_REQUEST"),
+                                        Filters.eq("status", "pending")
+                                ),
+                                new Document("$set", new Document("status", "completed")
+                                        .append("completedTimestamp", new Date()))
+                        );
+                        broadcastQueueUpdate();
+                    }
+
+
 
 
                     Document updatedUserDoc = usersCollection.find(query).first();
@@ -914,7 +958,7 @@ public class ParliamentServlet extends HttpServlet {
                     response.setContentType("application/json");
                     response.getWriter().write(resp.toString());
                     logger.info("President added new proposal: '{}'", title);
-                    repopulateProposalQueue(); 
+                    repopulateProposalQueue();
                 } else {
                     response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to retrieve inserted proposal.");
                 }
@@ -935,7 +979,7 @@ public class ParliamentServlet extends HttpServlet {
         Document query = new Document("_id", counterName);
         // Increment the sequence_value by 1. If the field doesn't exist, $inc creates it and sets it to 1.
         Document update = new Document("$inc", new Document("sequence_value", 1));
-        
+
         FindOneAndUpdateOptions options = new FindOneAndUpdateOptions()
                 .upsert(true) // Create the document if it doesn't exist
                 .returnDocument(ReturnDocument.AFTER); // Return the document after the update
@@ -987,9 +1031,9 @@ public class ParliamentServlet extends HttpServlet {
                 }
 
                 ObjectId proposalObjectId;
-                ObjectId userObjectIdFromString; 
+                ObjectId userObjectIdFromString;
                 try {
-                    proposalObjectId = new ObjectId(proposalIdStr); 
+                    proposalObjectId = new ObjectId(proposalIdStr);
                     userObjectIdFromString = new ObjectId(userId); // userId is from session attribute
                 } catch (IllegalArgumentException e) {
                     logger.warn("Invalid ObjectId format. Proposal ID: '{}', User ID from session: '{}'. Error: {}", proposalIdStr, userId, e.getMessage());
@@ -1070,7 +1114,7 @@ public class ParliamentServlet extends HttpServlet {
                 for (Document proposal : proposals) {
                     endProposalVoting(proposal, adjustedMap);
                 }
-                
+
                 // Broadcast that proposal states have been updated
                 JSONObject updateMsg = new JSONObject().put("type", "proposalsUpdated");
                 SeatWebSocket.broadcast(updateMsg);
@@ -1176,7 +1220,7 @@ public class ParliamentServlet extends HttpServlet {
                 SeatWebSocket.broadcast(updateMsg);
                 logger.info("Broadcasted proposalsUpdated after ending constitutional voting.");
                 repopulateProposalQueue(); // Call to repopulate and broadcast queue
-                
+
                 response.setStatus(HttpServletResponse.SC_OK);
                 JSONObject resp = new JSONObject();
                 resp.put("message", "Constitutional voting ended. Votes counted.");
@@ -1268,7 +1312,7 @@ public class ParliamentServlet extends HttpServlet {
         List<Document> allUsers = usersCollection.find().into(new ArrayList<>());
         int sum = 0;
         for (Document u : allUsers) {
-            sum += u.getInteger("electoralStrength", 0);
+            sum += safeInt(u,"electoralStrength", 0);
         }
         return sum;
     }
@@ -1297,7 +1341,7 @@ public class ParliamentServlet extends HttpServlet {
         for (Document nez : nezUsers) {
             if (nez.getBoolean("present", false)) {
                 String userId = nez.getObjectId("_id").toHexString();
-                int es = nez.getInteger("electoralStrength", 0);
+                int es = safeInt(nez,"electoralStrength", 0);
                 adjustedMap.put(userId, es);
             }
         }
@@ -1318,7 +1362,7 @@ public class ParliamentServlet extends HttpServlet {
             int sumAbsent = 0;
 
             for (Document user : partyUsers) {
-                int es = user.getInteger("electoralStrength", 0);
+                int es = safeInt(user,"electoralStrength", 0);
                 if (user.getBoolean("present", false)) {
                     presentUsers.add(user);
                     sumPresent += es;
@@ -1331,7 +1375,7 @@ public class ParliamentServlet extends HttpServlet {
 
             for (Document pUser : presentUsers) {
                 String userId = pUser.getObjectId("_id").toHexString();
-                int original = pUser.getInteger("electoralStrength", 0);
+                int original = safeInt(pUser,"electoralStrength", 0);
                 double adjustedDouble = original + ((double) original * sumAbsent / sumPresent);
                 int adjusted = (int) Math.round(adjustedDouble);
                 adjustedMap.put(userId, adjusted);
@@ -1393,7 +1437,7 @@ public class ParliamentServlet extends HttpServlet {
             for (Document user : presentUsers) {
                 String username = escapeDiscordMarkdown(user.getString("username"));
                 String party = escapeDiscordMarkdown(user.getString("partyAffiliation"));
-                int es = user.getInteger("electoralStrength", 0);
+                int es = safeInt(user,"electoralStrength", 0);
 
                 // e.g. "**32** - MNSB - **PanNuggetek**"
                 msg.append("**").append(es).append("** - ")
@@ -1473,7 +1517,7 @@ public class ParliamentServlet extends HttpServlet {
                 // Example: "50 b.ch. - PanNuggetek (Reason: disruption)"
                 for (Document fineDoc : meetingFines) {
                     String finedUser = escapeDiscordMarkdown(fineDoc.getString("username"));
-                    int amount = fineDoc.getInteger("amount", 0);
+                    int amount = safeInt(fineDoc,"amount", 0);
                     String reason = escapeDiscordMarkdown(fineDoc.getString("reason"));
                     msg.append(amount).append(" b.ch. - ").append(finedUser)
                             .append(" (").append(reason).append(")\n");
@@ -1887,12 +1931,12 @@ public class ParliamentServlet extends HttpServlet {
                 userJson.put("username", doc.getString("username"));
                 userJson.put("role", doc.getString("role"));
                 userJson.put("partyAffiliation", doc.getString("partyAffiliation"));
-                
+
                 // Add other non-sensitive fields as needed
                 userJson.put("present", doc.getBoolean("present", false));
                 userJson.put("seatStatus", doc.getString("seatStatus"));
-                userJson.put("fines", doc.getInteger("fines", 0));
-                userJson.put("electoralStrength", doc.getInteger("electoralStrength",1));
+                userJson.put("fines", safeInt(doc,"fines", 0));
+                userJson.put("electoralStrength", safeInt(doc,"electoralStrength",1));
                 // userJson.remove("password"); // Not needed as we are selectively adding
 
                 String seatStatus = doc.getString("seatStatus");
@@ -1957,10 +2001,10 @@ public class ParliamentServlet extends HttpServlet {
                 // Add other non-sensitive fields as needed
                 userJson.put("present", userDoc.getBoolean("present", false));
                 userJson.put("seatStatus", userDoc.getString("seatStatus"));
-                userJson.put("fines", userDoc.getInteger("fines", 0));
-                userJson.put("electoralStrength", userDoc.getInteger("electoralStrength",1));
+                userJson.put("fines", safeInt(userDoc,"fines", 0));
+                userJson.put("electoralStrength", safeInt(userDoc,"electoralStrength",1));
                 // userJson.remove("password"); // Not needed as we are selectively adding
-                
+
                 String seatStatus = userDoc.getString("seatStatus");
                 userJson.put("seatStatus", seatStatus != null ? seatStatus : "NEUTRAL");
 
@@ -2008,6 +2052,7 @@ public class ParliamentServlet extends HttpServlet {
                 proposalJson.put("referencedProposal", doc.getString("referencedProposal"));
                 proposalJson.put("proposalVisual", doc.getString("proposalVisual"));
                 proposalJson.put("meetingNumber", doc.getInteger("meetingNumber"));
+                proposalJson.put("votingEnded", doc.getBoolean("votingEnded", false));
 
 
                 if (doc.getBoolean("votingEnded", false)) {
@@ -2122,7 +2167,7 @@ public class ParliamentServlet extends HttpServlet {
                 logger.warn("User '{}' submitted proposal with description exceeding max length. Description length: {}", sessionUsername, description.length());
                 return;
             }
-            
+
             // Validate sessionUserId as ObjectId
             ObjectId userObjectId;
             try {
@@ -2140,7 +2185,7 @@ public class ParliamentServlet extends HttpServlet {
                 // Not checking description for stricter match, title and user within timeframe is enough
                 .append("status", "pending")
                 .append("submissionTimestamp", new Document("$gte", new Date(thirtySecondsAgo)));
-            
+
             if (pendingProposalsCollection.find(recentDuplicateQuery).first() != null) {
                 response.sendError(HttpServletResponse.SC_CONFLICT, "Duplicate submission detected. Please wait a moment before resubmitting.");
                 logger.warn("User '{}' attempted to submit a duplicate proposal for title '{}' within 30 seconds.", sessionUsername, title);
@@ -2181,7 +2226,7 @@ public class ParliamentServlet extends HttpServlet {
             proposalData.put("submissionTimestamp", pendingProposalDoc.getDate("submissionTimestamp").toInstant().toString());
             proposalData.put("status", "pending");
             wsMessage.put("proposal", proposalData);
-            SeatWebSocket.broadcast(wsMessage); 
+            SeatWebSocket.broadcast(wsMessage);
             logger.info("Broadcasted new pending proposal notification for ID '{}'.", insertedId.toHexString());
 
         } catch (org.json.JSONException je) {
@@ -2258,10 +2303,10 @@ public class ParliamentServlet extends HttpServlet {
             }
 
             // For simplicity, submitted proposals become normal, non-priority, non-constitutional
-            boolean isPriority = false; 
-            boolean isConstitutional = false; 
-            String type = "normal"; 
-            String associatedProposal = ""; 
+            boolean isPriority = false;
+            boolean isConstitutional = false;
+            String type = "normal";
+            String associatedProposal = "";
 
             int proposalNumber;
             String proposalVisual;
@@ -2277,15 +2322,15 @@ public class ParliamentServlet extends HttpServlet {
             }
 
             int meetingNumber = getCurrentMeetingNumber();
-            String party = "Submitted by " + pendingProposalDoc.getString("submittedByUsername"); 
+            String party = "Submitted by " + pendingProposalDoc.getString("submittedByUsername");
 
             Document mainProposalDoc = new Document("title", pendingProposalDoc.getString("title"))
-                .append("description", pendingProposalDoc.getString("description")) 
+                .append("description", pendingProposalDoc.getString("description"))
                 .append("proposalNumber", proposalNumber)
                 .append("party", party) // XSS: Client responsible for escaping party if rendered
                 .append("isPriority", isPriority)
                 .append("isConstitutional", isConstitutional)
-                .append("voteRequirement", "Rel") 
+                .append("voteRequirement", "Rel")
                 .append("stupid", false)
                 .append("associationType", type)
                 .append("referencedProposal", associatedProposal)
@@ -2296,8 +2341,8 @@ public class ParliamentServlet extends HttpServlet {
                 .append("totalAgainst", 0)
                 .append("votingEnded", false)
                 .append("submittedByUsername", pendingProposalDoc.getString("submittedByUsername")) // XSS: Client responsible for escaping if rendered
-                .append("pendingProposalId", pendingProposalDoc.getObjectId("_id")); 
-            
+                .append("pendingProposalId", pendingProposalDoc.getObjectId("_id"));
+
             proposalsCollection.insertOne(mainProposalDoc);
             ObjectId mainProposalId = mainProposalDoc.getObjectId("_id");
 
@@ -2312,7 +2357,7 @@ public class ParliamentServlet extends HttpServlet {
                 logger.error("CRITICAL: Failed to update status of pending proposal ID '{}' to 'approved' after creating main proposal ID '{}'. Manual cleanup might be needed. Error: {}", pendingProposalIdStr, mainProposalId.toHexString(), e_update.getMessage());
                 // Continue with the response as the main proposal was created.
             }
-            
+
             // Prepare response with main proposal details
             Document insertedProposal = proposalsCollection.find(Filters.eq("_id", mainProposalId)).first();
             JSONObject responseJson = new JSONObject();
@@ -2359,7 +2404,7 @@ public class ParliamentServlet extends HttpServlet {
                 SeatWebSocket.broadcast(proposalUpdateMsg);
                 logger.info("Broadcasted new main proposal (from pending) id '{}'.", mainProposalId.toHexString());
             }
-            
+
             // WebSocket Broadcast for the updated pending proposal status
             JSONObject pendingStatusUpdateMsg = new JSONObject();
             pendingStatusUpdateMsg.put("type", "pendingProposalStatusUpdate");
@@ -2433,15 +2478,22 @@ public class ParliamentServlet extends HttpServlet {
                 queueItemJson.put("timestamp", item.getDate("timestamp").toInstant().toString());
 
                 // Add type-specific fields
+                //  ── inside the for-loop that builds queueItemJson ─────────────────────
                 if ("PROPOSAL_DISCUSSION".equals(item.getString("type"))) {
                     queueItemJson.put("proposalId", item.getObjectId("proposalId").toHexString());
                     queueItemJson.put("proposalTitle", item.getString("proposalTitle"));
                     queueItemJson.put("proposalVisual", item.getString("proposalVisual"));
+
                 } else if ("SPEAKER_REQUEST".equals(item.getString("type"))) {
                     queueItemJson.put("userId", item.getObjectId("userId").toHexString());
                     queueItemJson.put("username", item.getString("username"));
-                    queueItemJson.put("requestType", item.getString("requestType")); // e.g., "REQUESTING_TO_SPEAK", "OBJECTING"
+                    queueItemJson.put("requestType", item.getString("requestType"));
+
+                } else if ("OBJECTION".equals(item.getString("type"))) {             //  ← NEW
+                    queueItemJson.put("userId", item.getObjectId("userId").toHexString());
+                    queueItemJson.put("username", item.getString("username"));       //  ← NEW
                 }
+
                 // Add other fields as necessary, ensuring they are handled if they might not exist.
                 // Example: item.get("someField", defaultValue) or check with item.containsKey("someField")
 
@@ -2482,17 +2534,17 @@ public class ParliamentServlet extends HttpServlet {
                 } else {
                     priorityValue = 30; // Standard proposals
                 }
-                
+
                 // Use current time for timestamp to ensure fresh items are ordered correctly if priorities are the same
                 // Or, if proposals have a 'lastActivityTimestamp' or 'submissionTimestamp', that could be used.
                 // For now, using new Date() for new queue entries.
-                Date itemTimestamp = new Date(); 
+                Date itemTimestamp = new Date();
 
                 Document queueItem = new Document("type", "PROPOSAL_DISCUSSION")
                     .append("proposalId", proposal.getObjectId("_id"))
                     .append("proposalTitle", proposal.getString("title")) // XSS: Client responsible for escaping
                     .append("proposalVisual", proposal.getString("proposalVisual")) // XSS: Client responsible for escaping
-                    .append("timestamp", itemTimestamp) 
+                    .append("timestamp", itemTimestamp)
                     .append("priority", priorityValue)
                     .append("status", "pending"); // All repopulated proposals start as pending in queue
                 queueEntries.add(queueItem);
@@ -2561,7 +2613,7 @@ public class ParliamentServlet extends HttpServlet {
             response.setContentType("application/json");
             response.getWriter().write(resp.toString());
             logger.info("President '{}' rejected pending proposal ID '{}'.", presidentUsername, pendingProposalIdStr);
-            
+
             // WebSocket Broadcast for the updated pending proposal status
             JSONObject pendingStatusUpdateMsg = new JSONObject();
             pendingStatusUpdateMsg.put("type", "pendingProposalStatusUpdate");
@@ -2600,13 +2652,13 @@ public class ParliamentServlet extends HttpServlet {
                 queueItemJson.put("type", item.getString("type"));
                 queueItemJson.put("status", item.getString("status"));
                 queueItemJson.put("priority", item.getInteger("priority"));
-                
+
                 Date timestamp = item.getDate("timestamp");
                 if (timestamp != null) {
                     queueItemJson.put("timestamp", timestamp.toInstant().toString());
                 } else {
                     // Handle case where timestamp might be null, though it shouldn't be based on insertion logic
-                    queueItemJson.put("timestamp", ""); 
+                    queueItemJson.put("timestamp", "");
                 }
 
 
@@ -2623,7 +2675,13 @@ public class ParliamentServlet extends HttpServlet {
                     }
                     queueItemJson.put("username", item.getString("username")); // XSS: Client responsible for escaping
                     queueItemJson.put("requestType", item.getString("requestType"));
+                } else if ("OBJECTION".equals(item.getString("type"))) {
+                    // same fields as speaker request
+                    queueItemJson.put("userId",      item.getObjectId("userId").toHexString());
+                    queueItemJson.put("username",    item.getString("username"));
+                    queueItemJson.put("requestType", "OBJECTING");
                 }
+
                 queueJsonArray.put(queueItemJson);
             }
 
@@ -2671,11 +2729,11 @@ public class ParliamentServlet extends HttpServlet {
 
             if (existingRequest != null) {
                 response.sendError(HttpServletResponse.SC_CONFLICT, "You are already in the queue or have an active objection.");
-                logger.warn("User '{}' (ID: {}) attempted to request to speak but is already in queue/objecting (Item ID: {}).", 
+                logger.warn("User '{}' (ID: {}) attempted to request to speak but is already in queue/objecting (Item ID: {}).",
                             sessionUsername, sessionUserId, existingRequest.getObjectId("_id").toHexString());
                 return;
             }
-            
+
             // Optional: Parse JSON request for proposalId
             String proposalIdStr = null;
             ObjectId proposalObjectId = null;
@@ -2683,7 +2741,7 @@ public class ParliamentServlet extends HttpServlet {
                 StringBuilder sb = new StringBuilder();
                 String line;
                 // Check if request has a body. getReader() might throw if no body.
-                if (request.getContentLengthLong() > 0) { 
+                if (request.getContentLengthLong() > 0) {
                     while ((line = request.getReader().readLine()) != null) {
                         sb.append(line);
                     }
@@ -2780,7 +2838,7 @@ public class ParliamentServlet extends HttpServlet {
                 logger.info("Queue item ID '{}' was targeted to be set active by President '{}'. Modified count was 0, but item exists. Status: {}", itemIdStr, presidentUsername, checkItemExists.getString("status"));
 
             }
-            
+
             Document activeItem = parliamentQueueCollection.find(eq("_id", itemObjectId)).first();
             if (activeItem == null) {
                  // Should not happen if updateResult.getModifiedCount() > 0 or if checkItemExists found it
@@ -2809,9 +2867,9 @@ public class ParliamentServlet extends HttpServlet {
                         userJsonForBroadcast.put("partyAffiliation", updatedUserDoc.getString("partyAffiliation"));
                         userJsonForBroadcast.put("present", updatedUserDoc.getBoolean("present", false));
                         userJsonForBroadcast.put("seatStatus", updatedUserDoc.getString("seatStatus")); // Should be SPEAKING
-                        userJsonForBroadcast.put("fines", updatedUserDoc.getInteger("fines", 0));
-                        userJsonForBroadcast.put("electoralStrength", updatedUserDoc.getInteger("electoralStrength",1));
-                        
+                        userJsonForBroadcast.put("fines", safeInt(updatedUserDoc,"fines", 0));
+                        userJsonForBroadcast.put("electoralStrength", safeInt(updatedUserDoc,"electoralStrength",1));
+
                         JSONObject seatUpdateMsg = new JSONObject();
                         seatUpdateMsg.put("type", "seatUpdate");
                         seatUpdateMsg.put("user", userJsonForBroadcast);
@@ -2834,6 +2892,22 @@ public class ParliamentServlet extends HttpServlet {
             logger.error("Error during setting queue item active (ID: '{}') by President '{}': ", itemIdStr, presidentUsername, e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while setting the queue item active.");
         }
+    }
+    /**
+     * Reads an integer-like value from a BSON document even when it is stored
+     * as Int32, Int64 or Double. Falls back to the supplied default.
+     */
+    private int safeInt(Document doc, String key, int defaultVal) {
+        Object raw = doc.get(key);
+        if (raw instanceof Number) {
+            return ((Number) raw).intValue();   // works for Integer, Long, Double …
+        }
+        if (raw != null) {
+            try {
+                return Integer.parseInt(raw.toString());
+            } catch (NumberFormatException ignore) { }
+        }
+        return defaultVal;
     }
 
     private void handleQueueCompleteActive(HttpServletRequest request, HttpServletResponse response, String itemIdStr) throws IOException {
@@ -2884,7 +2958,7 @@ public class ParliamentServlet extends HttpServlet {
                     Document userUpdateQuery = new Document("_id", userIdToUpdate);
                     Document userUpdateOperation = new Document("$set", new Document("seatStatus", "NEUTRAL"));
                     usersCollection.updateOne(userUpdateQuery, userUpdateOperation);
-                    
+
                     // Broadcast individual user seat update
                     Document updatedUserDoc = usersCollection.find(userUpdateQuery).first();
                     if (updatedUserDoc != null) {
@@ -2895,8 +2969,8 @@ public class ParliamentServlet extends HttpServlet {
                         userJsonForBroadcast.put("partyAffiliation", updatedUserDoc.getString("partyAffiliation"));
                         userJsonForBroadcast.put("present", updatedUserDoc.getBoolean("present", false));
                         userJsonForBroadcast.put("seatStatus", updatedUserDoc.getString("seatStatus")); // Should be NEUTRAL
-                        userJsonForBroadcast.put("fines", updatedUserDoc.getInteger("fines", 0));
-                        userJsonForBroadcast.put("electoralStrength", updatedUserDoc.getInteger("electoralStrength",1));
+                        userJsonForBroadcast.put("fines", safeInt(updatedUserDoc,"fines", 0));
+                        userJsonForBroadcast.put("electoralStrength", safeInt(updatedUserDoc,"electoralStrength",1));
                         
                         JSONObject seatUpdateMsg = new JSONObject();
                         seatUpdateMsg.put("type", "seatUpdate");
@@ -2920,5 +2994,7 @@ public class ParliamentServlet extends HttpServlet {
             logger.error("Error during completing queue item (ID: '{}') by President '{}': ", itemIdStr, presidentUsername, e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "An error occurred while completing the queue item.");
         }
+
+
     }
 }
